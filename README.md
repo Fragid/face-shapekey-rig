@@ -11,6 +11,8 @@ A Blender add-on for animating faces on 3D characters, in two ways:
 
 Switch between the two at the top of the **Face Rig** tab. Both keep their data.
 
+🎬 **Demo video:** [youtu.be/tEcgZZRDbjc](https://youtu.be/tEcgZZRDbjc)
+
 **Requires Blender 5.2 or newer.**
 UI languages: English, 日本語, 中文, 한국어.
 

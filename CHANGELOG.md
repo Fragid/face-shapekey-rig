@@ -2,17 +2,10 @@
 
 ## v1.0.223
 
-### Fixed
-- Re-selecting the same rig (or picking a rig for the first time) no longer
-  brings back the settings saved inside the rig at the last save. Clearing
-  everything and picking the rig again now really starts empty. Switching
-  between different characters still restores each one's own settings.
-- A Python error ("the return value must be None") when toggling a mouth
-  sequence's single-mouth option or restoring settings that include it.
-
-## v1.0.222
-
 > **Requires Blender 5.2 or newer.**
+>
+> 🎬 **Demo video:** https://youtu.be/tEcgZZRDbjc
+>
 > This is a large update since v1.0.42. The headline is the new **Sprite mode**:
 > a 2D face built from sprite-sheet parts, drawn on a canvas that follows your
 > 3D face mesh. The shape-key **Driver mode** is still there; switch between the
@@ -91,6 +84,12 @@
 - Text appearing twice (Korean and English) after updating, or when two copies
   of the add-on were enabled. A warning with a **Disable** button is shown now.
 - Relative image paths failing when picking a sheet from disk.
+- Re-selecting the same rig (or picking a rig for the first time) no longer
+  brings back the settings saved inside the rig at the last save. Clearing
+  everything and picking the rig again now really starts empty. Switching
+  between different characters still restores each one's own settings.
+- A Python error ("the return value must be None") when toggling a mouth
+  sequence's single-mouth option or restoring settings that include it.
 
 ### Upgrading from older versions
 - Files are migrated automatically on open and look the same as before.
