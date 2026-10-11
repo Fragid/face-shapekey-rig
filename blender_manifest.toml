@@ -1,11 +1,15 @@
 schema_version = "1.0.0"
 id = "face_shapekey_rig"
-version = "1.0.0-beta.3"
+version = "1.0.222"
 name = "Face Shape Key Rig"
-tagline = "Viewport slider and pad controllers for shape keys"
-maintainer = "DeerHunter"
+tagline = "Sprite face parts and shape key controllers for 3D characters"
+maintainer = "thwotkd123"
 type = "add-on"
-website = "https://github.com/Denxia/face-shapekey-rig"
-support = "https://github.com/Denxia/face-shapekey-rig/issues"
-blender_version_min = "4.2.0"
+website = "https://github.com/Fragid/face-shapekey-rig"
+support = "https://github.com/Fragid/face-shapekey-rig/issues"
+blender_version_min = "5.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+network = "iFacialMocap over local Wi-Fi, local server for editor windows"
+files = "Import/export canvas archives, load sprite sheet images"
