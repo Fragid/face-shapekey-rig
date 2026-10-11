@@ -726,6 +726,12 @@ def _flap_cache_all():
         pass
 
 
+def _single_update(self, context):
+    """update 콜백은 None을 돌려줘야 함 (튜플을 돌려주면 ValueError)."""
+    _flap_update(self, context)
+    _vp_auto(self)
+
+
 def _flap_update(self, context):
     """짝 변경 → 조회표를 다시 쓰기 위해 적용된 자유 배치 시트 재구성."""
     _flap_cache_all()
@@ -1465,7 +1471,7 @@ class FSKR_AtlasFlap(bpy.types.PropertyGroup):
                     "시퀀스는 항상 표시됩니다")
     single: bpy.props.BoolProperty(
         name="단일 입", default=False,
-        update=lambda s, c: (_flap_update(s, c), _vp_auto(s)),
+        update=lambda s, c: _single_update(s, c),
         description="말할 때도 이 입을 그대로 둡니다 (뻐끔거리지 않음). "
                     "'나머지 표정 전부'의 입으로 바뀌지 않게 할 때 사용")
     cur_single_size: _single_prop("size", "크기", True)

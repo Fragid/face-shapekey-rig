@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.223
+
+### Fixed
+- Re-selecting the same rig (or picking a rig for the first time) no longer
+  brings back the settings saved inside the rig at the last save. Clearing
+  everything and picking the rig again now really starts empty. Switching
+  between different characters still restores each one's own settings.
+- A Python error ("the return value must be None") when toggling a mouth
+  sequence's single-mouth option or restoring settings that include it.
+
 ## v1.0.222
 
 > **Requires Blender 5.2 or newer.**

@@ -2841,7 +2841,14 @@ class FSKR_OT_char_import(bpy.types.Operator):
         s = context.scene.fskr
         st = snap.get("settings", {})
         # 포인터: 리그는 선택한 것, 메시/목 리그는 이름 재해석
-        s.rig = rig
+        # (리그 변경 콜백이 스냅샷을 덮어쓰지 않게 잠시 막음)
+        from .core import _SWITCH
+        _SWITCH["busy"] = True
+        try:
+            s.rig = rig
+        finally:
+            _SWITCH["busy"] = False
+        _SWITCH["rig"] = rig.name
         mn = st.get("mesh")
         if isinstance(mn, str) and mn.startswith("@id:"):
             mo = _resolve_mesh_name(mn[4:], rig)

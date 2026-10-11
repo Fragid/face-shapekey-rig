@@ -2687,15 +2687,30 @@ def _rig_update(self, context):
     rig = self.rig
     if rig is None:
         return
+    prev = None
     try:
         prev = bpy.data.objects.get(str(_SWITCH.get("rig", "")))
-        if prev is not None and prev is not rig:
-            _char_snapshot(context.scene, prev)
     except Exception:
-        pass
+        prev = None
     try:
         act = context.view_layer.objects.active
         _SWITCH["last"] = act.name if act is not None else ""
+    except Exception:
+        pass
+    if prev is None or prev is rig:
+        # 다른 캐릭터에서 넘어오는 게 아니면(같은 리그를 다시 고름, 처음
+        # 고름) 리그에 남은 예전 스냅샷으로 되살리지 않는다. 지금 패널
+        # 상태(예: 다 지운 상태)가 그 리그의 상태가 됨.
+        # (다른 파일의 캐릭터 설정을 가져오는 건 '캐릭터 가져오기'로)
+        _SWITCH["rig"] = rig.name
+        try:
+            _char_snapshot(context.scene, rig)
+        except Exception:
+            pass
+        _invalidate_ui_cache()
+        return
+    try:
+        _char_snapshot(context.scene, prev)
     except Exception:
         pass
     _char_switch_to(context.scene, rig)

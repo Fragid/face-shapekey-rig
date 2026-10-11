@@ -181,6 +181,15 @@ _persist_handlers = []
 def _fskr_on_load(_dummy):
     """파일을 열 때마다 드라이버 네임스페이스가 초기화되므로 재설치."""
     _fskr_ns_install()
+    # 이전 파일의 '지금 캐릭터' 기억을 이 파일 것으로 (다른 파일 리그와
+    # 이름이 같아 엉뚱한 스냅샷을 쓰거나 되살리지 않게)
+    try:
+        from .core import _SWITCH
+        r9 = getattr(bpy.context.scene.fskr, "rig", None)
+        _SWITCH["rig"] = r9.name if r9 is not None else ""
+        _SWITCH["busy"] = False
+    except Exception:
+        pass
     try:
         bpy.app.timers.register(_fskr_refresh_drivers,
                                 first_interval=0.2)
