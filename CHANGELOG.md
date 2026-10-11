@@ -2,9 +2,9 @@
 
 ## v1.0.223
 
-> **Requires Blender 5.2 or newer.**
->
 > 🎬 **Demo video:** https://youtu.be/tEcgZZRDbjc
+>
+> **Requires Blender 5.2 or newer.**
 >
 > This is a large update since v1.0.42. The headline is the new **Sprite mode**:
 > a 2D face built from sprite-sheet parts, drawn on a canvas that follows your
