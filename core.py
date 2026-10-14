@@ -522,7 +522,7 @@ _EN = {
     "패널 전체 제거": "Remove Entire Panel",
     "패널 위치 (그랩 바)": "Panel position (grab bar)",
     "캐릭터 따라다니기": "Follow character",
-    "패널(그랩 바)이 아래 본을 따라다니며 지금의 상대 위치를 계속 유지합니다. 캐릭터가 움직여도 패널이 옆에 붙어 있습니다": "The panel (grab bar) follows the bone below and keeps its current relative position, so it stays beside the character as it moves",
+    "패널(그랩 바)과 뷰포트 컨트롤러가 아래 본을 따라다니며 지금의 상대 위치를 계속 유지합니다. 캐릭터가 움직여도 옆에 붙어 있습니다 (켜면 리그의 c_pos·root 본을 자동으로 고름)": "The panel (grab bar) and viewport controllers follow the bone below and keep their current relative position, so they stay beside the character as it moves (turning this on picks the rig's c_pos / root bone automatically)",
     "따라갈 본이 있는 아마추어 (캐릭터 리그)": "The armature holding the bone to follow (the character rig)",
     "패널이 따라갈 본 (보통 머리 본)": "The bone the panel follows (usually the head bone)",
     "현재 위치로 고정": "Pin at current position",
@@ -1150,7 +1150,7 @@ _JA = {
     "패널 전체 제거": "パネル全体を削除",
     "패널 위치 (그랩 바)": "パネル位置（グラブバー）",
     "캐릭터 따라다니기": "キャラクターに追従",
-    "패널(그랩 바)이 아래 본을 따라다니며 지금의 상대 위치를 계속 유지합니다. 캐릭터가 움직여도 패널이 옆에 붙어 있습니다": "パネル（グラブバー）が下のボーンに追従し、現在の相対位置を保ちます。キャラクターが動いてもパネルは横に付いてきます",
+    "패널(그랩 바)과 뷰포트 컨트롤러가 아래 본을 따라다니며 지금의 상대 위치를 계속 유지합니다. 캐릭터가 움직여도 옆에 붙어 있습니다 (켜면 리그의 c_pos·root 본을 자동으로 고름)": "パネル（グラブバー）とビューポートコントローラーが下のボーンに追従し、現在の相対位置を保ちます。キャラクターが動いても横に付いてきます（オンにするとリグの c_pos・root ボーンを自動で選択）",
     "따라갈 본이 있는 아마추어 (캐릭터 리그)": "追従するボーンがあるアーマチュア（キャラクターリグ）",
     "패널이 따라갈 본 (보통 머리 본)": "パネルが追従するボーン（通常は頭のボーン）",
     "현재 위치로 고정": "現在の位置で固定",
@@ -1775,7 +1775,7 @@ _ZH = {
     "패널 전체 제거": "删除整个面板",
     "패널 위치 (그랩 바)": "面板位置（抓取条）",
     "캐릭터 따라다니기": "跟随角色",
-    "패널(그랩 바)이 아래 본을 따라다니며 지금의 상대 위치를 계속 유지합니다. 캐릭터가 움직여도 패널이 옆에 붙어 있습니다": "面板（抓取条）跟随下方的骨骼并保持当前相对位置，角色移动时面板始终贴在旁边",
+    "패널(그랩 바)과 뷰포트 컨트롤러가 아래 본을 따라다니며 지금의 상대 위치를 계속 유지합니다. 캐릭터가 움직여도 옆에 붙어 있습니다 (켜면 리그의 c_pos·root 본을 자동으로 고름)": "面板（抓取条）和视口控制器跟随下方的骨骼并保持当前相对位置，角色移动时始终贴在旁边（开启时自动选择绑定的 c_pos / root 骨骼）",
     "따라갈 본이 있는 아마추어 (캐릭터 리그)": "包含目标骨骼的骨架（角色绑定）",
     "패널이 따라갈 본 (보통 머리 본)": "面板要跟随的骨骼（通常是头部骨骼）",
     "현재 위치로 고정": "固定在当前位置",
@@ -2670,8 +2670,54 @@ def _panel_follow_bind(s, scene=None):
     return True
 
 
+_ROOT_BONES = ("c_pos", "c_traj", "root", "Root", "ROOT", "master",
+               "Master", "c_root", "torso")
+
+
+def _guess_root_bone(rig):
+    """캐릭터 전체를 옮기는 본 추정 (ARP c_pos, Rigify root 등)."""
+    if rig is None or rig.type != 'ARMATURE':
+        return ""
+    for n in _ROOT_BONES:
+        if n in rig.pose.bones:
+            return n
+    return ""
+
+
 def _panel_follow_update(self, context):
+    if self.panel_follow and _SWITCH.get("pf_fill") is not True:
+        # 켜는 순간 비어 있으면 지금 리그와 그 리그의 루트 본으로 채움
+        _SWITCH["pf_fill"] = True
+        try:
+            if self.panel_follow_rig is None and self.rig is not None:
+                self.panel_follow_rig = self.rig
+            if not self.panel_follow_bone:
+                self.panel_follow_bone = _guess_root_bone(
+                    self.panel_follow_rig)
+        finally:
+            _SWITCH["pf_fill"] = False
     _panel_follow_bind(self, context.scene)
+
+
+def draw_panel_follow(layout, s):
+    """패널(그랩 바) 위치 + 캐릭터 따라다니기 설정 (두 방식 공통)."""
+    pbr = (s.rig.pose.bones.get("FP_root")
+           if s.rig and s.rig.type == 'ARMATURE' else None)
+    if pbr is None:
+        return
+    boxr = layout.box()
+    boxr.label(text=_tr("패널 위치 (그랩 바)"), icon='EMPTY_ARROWS')
+    cr = boxr.column(align=True)
+    cr.prop(pbr, "location", index=0, text="X")
+    cr.prop(pbr, "location", index=1, text="Y")
+    cr.prop(pbr, "location", index=2, text="Z")
+    boxr.prop(s, "panel_follow", toggle=True, icon='CON_CHILDOF')
+    if s.panel_follow:
+        boxr.prop(s, "panel_follow_rig")
+        if s.panel_follow_rig and s.panel_follow_rig.type == 'ARMATURE':
+            boxr.prop_search(s, "panel_follow_bone",
+                             s.panel_follow_rig.data, "bones")
+        boxr.operator("fskr.panel_rebind", icon='PINNED')
 
 
 _SWITCH = {"busy": False, "last": "", "rig": ""}
@@ -2749,9 +2795,10 @@ class FSKR_Settings(bpy.types.PropertyGroup):
     panel_follow: bpy.props.BoolProperty(
         name="캐릭터 따라다니기", default=False,
         update=_panel_follow_update,
-        description="패널(그랩 바)이 아래 본을 따라다니며 지금의 상대 "
-                    "위치를 계속 유지합니다. 캐릭터가 움직여도 패널이 "
-                    "옆에 붙어 있습니다")
+        description="패널(그랩 바)과 뷰포트 컨트롤러가 아래 본을 따라다니며 "
+                    "지금의 상대 위치를 계속 유지합니다. 캐릭터가 움직여도 "
+                    "옆에 붙어 있습니다 (켜면 리그의 c_pos·root 본을 자동으로 "
+                    "고름)")
     panel_follow_rig: bpy.props.PointerProperty(
         name="대상 리그", type=bpy.types.Object, poll=_rig_poll,
         update=_panel_follow_update,

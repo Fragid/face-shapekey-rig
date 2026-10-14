@@ -24,6 +24,7 @@ from .core import (
     _slot_order,
     _sorted_ctls,
     _tr,
+    draw_panel_follow,
 )
 
 
@@ -44,24 +45,7 @@ class FSKR_PT_setup(bpy.types.Panel):
         col.prop(s, "rig")
         col.prop(s, "auto_switch")
         col.operator("fskr.place_panel", icon='CURSOR')
-        pbr = (s.rig.pose.bones.get("FP_root")
-               if s.rig and s.rig.type == 'ARMATURE' else None)
-        if pbr is not None:
-            boxr = col.box()
-            boxr.label(text=_tr("패널 위치 (그랩 바)"),
-                       icon='EMPTY_ARROWS')
-            cr = boxr.column(align=True)
-            cr.prop(pbr, "location", index=0, text="X")
-            cr.prop(pbr, "location", index=1, text="Y")
-            cr.prop(pbr, "location", index=2, text="Z")
-            boxr.prop(s, "panel_follow", toggle=True, icon='CON_CHILDOF')
-            if s.panel_follow:
-                boxr.prop(s, "panel_follow_rig")
-                if (s.panel_follow_rig
-                        and s.panel_follow_rig.type == 'ARMATURE'):
-                    boxr.prop_search(s, "panel_follow_bone",
-                                     s.panel_follow_rig.data, "bones")
-                boxr.operator("fskr.panel_rebind", icon='PINNED')
+        draw_panel_follow(col, s)
         row = col.row(align=True)
         row.prop(s, "token_l", text=_tr("좌"))
         row.prop(s, "token_r", text=_tr("우"))

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.224
+
+### Fixed
+- In Sprite mode the panel and viewport controllers could be left behind when
+  the character moved. **Follow character** is now also in the Controllers tab
+  (Viewport controllers box). Turning it on fills in the current rig and its
+  root bone automatically (`c_pos` for Auto-Rig Pro, `root` for Rigify) and
+  keeps the current relative position.
+
 ## v1.0.223
 
 > 🎬 **Demo video:** https://youtu.be/tEcgZZRDbjc

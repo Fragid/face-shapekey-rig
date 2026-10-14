@@ -1142,6 +1142,8 @@ def draw_panel(layout, s, st):
         arrange_button(col, s, "")
     if hasattr(s, "show_no_overlay"):
         col.prop(s, "show_no_overlay", toggle=True, icon='OVERLAY')
+    from .core import draw_panel_follow
+    draw_panel_follow(col, s)
     ctl = controllers(s, st)
     if ctl:
         b = col.box().column(align=True)
