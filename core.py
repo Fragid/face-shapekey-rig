@@ -11860,3 +11860,20 @@ _ZH.update({
     "부모(조상)의 색 덮기(컬러 오버레이)를 이 파츠에도 적용합니다. 켜면 이 파츠도 부모와 같은 색으로 덮입니다":
         "将父级（祖先）的颜色叠加也应用到此部件。开启后此部件也会被父级的颜色覆盖",
 })
+
+# 1.0.225: Alt+G/R/S 컨트롤러 보호
+_EN.update({
+    "변형 지우기 (컨트롤러 보호)": "Clear Transform (protect controllers)",
+    "선택한 본의 위치/회전/크기를 지웁니다. 캐릭터 본과 함께 선택된 Face Rig 컨트롤러(FP_…)는 그대로 둡니다. 컨트롤러만 선택했을 때는 평소처럼 지웁니다":
+        "Clears location/rotation/scale of the selected bones. Face Rig controllers (FP_…) selected together with character bones are left as they are. When only controllers are selected, they are cleared as usual",
+})
+_JA.update({
+    "변형 지우기 (컨트롤러 보호)": "トランスフォームをクリア（コントローラー保護）",
+    "선택한 본의 위치/회전/크기를 지웁니다. 캐릭터 본과 함께 선택된 Face Rig 컨트롤러(FP_…)는 그대로 둡니다. 컨트롤러만 선택했을 때는 평소처럼 지웁니다":
+        "選択したボーンの位置／回転／スケールをクリアします。キャラクターのボーンと一緒に選択された Face Rig コントローラー（FP_…）はそのままにします。コントローラーだけを選択した場合は通常どおりクリアします",
+})
+_ZH.update({
+    "변형 지우기 (컨트롤러 보호)": "清除变换（保护控制器）",
+    "선택한 본의 위치/회전/크기를 지웁니다. 캐릭터 본과 함께 선택된 Face Rig 컨트롤러(FP_…)는 그대로 둡니다. 컨트롤러만 선택했을 때는 평소처럼 지웁니다":
+        "清除所选骨骼的位置/旋转/缩放。与角色骨骼一起选中的 Face Rig 控制器（FP_…）保持不变。只选中控制器时照常清除",
+})

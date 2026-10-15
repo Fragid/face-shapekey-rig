@@ -2260,6 +2260,69 @@ def arrange_button(layout, s, scope, text=None):
                     icon='OBJECT_ORIGIN', depress=on).scope = ""
 
 
+def _fp_pose_state(pb):
+    return (tuple(pb.location), tuple(pb.rotation_quaternion),
+            tuple(pb.rotation_euler), tuple(pb.rotation_axis_angle),
+            tuple(pb.scale))
+
+
+def _fp_pose_restore(pb, v):
+    pb.location, pb.rotation_quaternion = v[0], v[1]
+    pb.rotation_euler, pb.rotation_axis_angle, pb.scale = v[2], v[3], v[4]
+
+
+class FSKR_OT_pose_clear_guard(bpy.types.Operator):
+    """Alt+G/R/S: 몸 본과 함께 선택된 페이스 컨트롤러는 건드리지 않음."""
+    bl_idname = "fskr.pose_clear_guard"
+    bl_label = "변형 지우기 (컨트롤러 보호)"
+    bl_description = ("선택한 본의 위치/회전/크기를 지웁니다. 캐릭터 본과 함께 "
+                      "선택된 Face Rig 컨트롤러(FP_…)는 그대로 둡니다. "
+                      "컨트롤러만 선택했을 때는 평소처럼 지웁니다")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    what: bpy.props.EnumProperty(
+        items=(('LOC', "Location", ""), ('ROT', "Rotation", ""),
+               ('SCALE', "Scale", "")), default='LOC',
+        options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'POSE'
+
+    def invoke(self, context, event):
+        return self.execute(context)
+
+    def execute(self, context):
+        sel = list(getattr(context, "selected_pose_bones", None) or [])
+        fp = [pb for pb in sel if pb.name.startswith("FP_")]
+        other = [pb for pb in sel if not pb.name.startswith("FP_")]
+        keep = {}
+        if fp and other:   # 몸과 같이 고른 경우만 컨트롤러 보호
+            keep = {(pb.id_data.name, pb.name): _fp_pose_state(pb)
+                    for pb in fp}
+        op = {'LOC': bpy.ops.pose.loc_clear, 'ROT': bpy.ops.pose.rot_clear,
+              'SCALE': bpy.ops.pose.scale_clear}[self.what]
+        from .core import _SWITCH
+        # 지우는 도중 갱신이 돌면 표정·입 손잡이가 원점(첫 항목)으로 간 것으로
+        # 보고 적용해 버리므로, 되돌릴 때까지 컨트롤러 동기화를 멈춤
+        _SWITCH["clear_guard"] = bool(keep)
+        try:
+            op()
+        except Exception as e:
+            _SWITCH["clear_guard"] = False
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        try:
+            for (on, bn), v in keep.items():
+                ob = bpy.data.objects.get(on)
+                pb = ob.pose.bones.get(bn) if ob is not None else None
+                if pb is not None:
+                    _fp_pose_restore(pb, v)
+        finally:
+            _SWITCH["clear_guard"] = False
+        return {'FINISHED'}
+
+
 class FSKR_OT_arrange_exit(bpy.types.Operator):
     bl_idname = "fskr.arrange_exit"
     bl_label = "배치 모드 끄기"

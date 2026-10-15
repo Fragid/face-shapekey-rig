@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.225
+
+### Fixed
+- Selecting everything in Pose Mode and pressing **Alt+R / Alt+G / Alt+S** to
+  reset the body pose also reset the Face Rig controllers. The panel layout
+  fell apart, and the expression list handle jumped to the first item and
+  applied that expression, throwing parts out of place. Controllers (`FP_…`
+  bones) selected together with character bones are now left untouched.
+  Selecting only controllers still clears them as usual.
+
 ## v1.0.224
 
 ### Fixed

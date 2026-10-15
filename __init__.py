@@ -75,6 +75,7 @@ from .operators import (
     FSKR_OT_attach_panel,
     FSKR_OT_sync_colors,
     FSKR_OT_snap_move,
+    FSKR_OT_pose_clear_guard,
     FSKR_OT_edge_move,
     FSKR_OT_arrange_exit,
     FSKR_OT_arrange_toggle,
@@ -145,7 +146,7 @@ classes = (FSKR_CollectionItem, FSKR_PresetItem, FSKR_ChainItem,
            FSKR_OT_edit_ctl, FSKR_OT_batch_edit,
            FSKR_OT_mirror_ctl, FSKR_OT_move_ctl,
            FSKR_OT_sort_visual,
-           FSKR_OT_snap_move, FSKR_OT_edge_move, FSKR_OT_arrange_exit,
+           FSKR_OT_snap_move, FSKR_OT_pose_clear_guard, FSKR_OT_edge_move, FSKR_OT_arrange_exit,
            FSKR_OT_arrange_toggle,
            FSKR_OT_add_collection, FSKR_OT_del_collection,
            FSKR_OT_assign_collection,
@@ -232,6 +233,12 @@ def register():
         # 배치 모드에서 G = 이동 (Ctrl=스냅, 조건 밖에서는 일반 G로 통과)
         kmi = km.keymap_items.new("fskr.snap_move", 'G', 'PRESS')
         addon_keymaps.append((km, kmi))
+        # Alt+G/R/S: 몸 본과 함께 선택된 페이스 컨트롤러는 보호
+        for ck, cw in (('G', 'LOC'), ('R', 'ROT'), ('S', 'SCALE')):
+            kmi = km.keymap_items.new("fskr.pose_clear_guard", ck, 'PRESS',
+                                      alt=True)
+            kmi.properties.what = cw
+            addon_keymaps.append((km, kmi))
         # 배치 모드에서 ESC / 우클릭 = 배치 모드 끄기 (조작 중이면 조작 취소가
         # 먼저 받음, 배치 모드가 아니면 원래 동작으로 통과)
         for ek in ('ESC', 'RIGHTMOUSE'):

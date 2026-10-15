@@ -555,6 +555,9 @@ def _sync_safe(scene, from_frame):
 
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
+    from .core import _SWITCH
+    if _SWITCH.get("clear_guard"):
+        return   # Alt+G/R/S 보호 중: 컨트롤러가 잠깐 원점에 간 걸 무시
     _sync_safe(scene, False)
     try:
         _arrange_redirect(scene)
