@@ -470,6 +470,59 @@ def _vis_raw(rig, L, v):
         pass
 
 
+def _flip_prop(L):
+    st = _owner(L)
+    rig = _rig()
+    if st is None or rig is None:
+        return None, None
+    try:
+        ast, aL = _anim_source(bpy.context.scene.fskr, st, L)
+    except Exception:
+        ast, aL = st, L
+    return rig, _p_flip(ast, aL)
+
+
+def _flip_get(L):
+    rig, p = _flip_prop(L)
+    if rig is None or p not in rig.keys():
+        try:
+            return bool(L.get("flip_x", False))
+        except Exception:
+            return False
+    try:
+        return float(rig[p]) >= 0.5
+    except Exception:
+        return False
+
+
+def _flip_set(L, v):
+    L["flip_x"] = bool(v)     # 예전 버전 호환용 값도 맞춤
+    rig, p = _flip_prop(L)
+    if rig is None:
+        return
+    new = p not in rig.keys()
+    rig[p] = 1.0 if v else 0.0
+    st = _owner(L)
+    try:
+        rig.update_tag()
+        ob = bpy.data.objects.get(st.target) if st else None
+        if ob is not None:
+            ob.update_tag()
+    except Exception:
+        pass
+    # 반전 노드가 없는 예전 머티리얼이면 한 번 다시 만들기
+    try:
+        mat = bpy.data.materials.get(_MAT_PREFIX + st.uid) if st else None
+        lst = _src_stack(bpy.context.scene.fskr, st) if st else None
+        nm = "EYFX_%s_%s_0" % (lst.uid if lst else "", L.lid)
+        if st is not None and st.built and (
+                new or mat is None or mat.node_tree is None
+                or nm not in mat.node_tree.nodes):
+            eye_build(bpy.context.scene.fskr, st)
+    except Exception as e:
+        print("FSKR flip rebuild:", e)
+
+
 def _vis_get(L):
     rig, p = _vis_prop(L)
     if rig is None or p not in rig.keys():
@@ -2050,8 +2103,10 @@ class FSKR_EyeLayer(bpy.types.PropertyGroup):
         update=_rebuild_cb,
         description="아래 레이어들과 섞는 방식 (포토샵 레이어 혼합 모드)")
     flip_x: bpy.props.BoolProperty(
-        name="좌우 반전", default=False, update=_rebuild_cb,
-        description="이 레이어 그림을 데칼 안에서 좌우로 뒤집습니다")
+        name="좌우 반전", default=False, get=lambda s_: _flip_get(s_),
+        set=lambda s_, v: _flip_set(s_, v),
+        description="이 레이어 그림을 데칼 안에서 좌우로 뒤집습니다. 리그 "
+                    "프로퍼티라 키·표정 프리셋·파츠 폴더에 들어갑니다")
     sym: bpy.props.BoolProperty(
         name="대칭 복사", default=False, update=_rebuild_cb,
         description="데칼 가운데를 기준으로 반대쪽에 거울처럼 하나 더 "
@@ -2707,17 +2762,25 @@ def _p_vis(st, L):
     return (k + "_Visible") if k else "fskr_ey_%s_%s_vis" % (st.uid, L.lid)
 
 
+def _p_flip(st, L):
+    """좌우 반전: 1 = 반전. 키·프리셋·폴더에 들어감 (Constant)."""
+    k = _pk(L)
+    return (k + "_Flip") if k else "fskr_ey_%s_%s_flip" % (st.uid, L.lid)
+
+
 def _anim_props(st, L):
     return (_p_op(st, L), _p_px(st, L), _p_py(st, L), _p_sx(st, L),
             _p_sy(st, L), _p_rot(st, L),
             _p_crop(st, L, "t"), _p_crop(st, L, "b"),
-            _p_crop(st, L, "l"), _p_crop(st, L, "r"), _p_vis(st, L))
+            _p_crop(st, L, "l"), _p_crop(st, L, "r"), _p_vis(st, L),
+            _p_flip(st, L))
 
 
 ANIM_KEYS = ("op", "px", "py", "sx", "sy", "rot", "ct", "cb", "cl", "cr",
-             "vis")
-ANIM_DEFAULTS = (1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
-CONST_KEYS = ("vis",)   # 항상 Constant 보간 (켜짐/꺼짐)
+             "vis", "flip")
+ANIM_DEFAULTS = (1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+CONST_KEYS = ("vis", "flip")   # 항상 Constant 보간 (켜짐/꺼짐)
+_CONST_SUFFIX = ("_Visible", "_vis", "_Flip", "_flip")
 
 
 def _ensure_anim_props(rig, st, L):
@@ -2736,6 +2799,12 @@ def _ensure_anim_props(rig, st, L):
         raw = L.get("show", True) if hasattr(L, "get") else True
         rig[pv] = 1.0 if raw else 0.0
     _ensure_float(rig, pv, 1.0, 0.0, 1.0)
+    pf = _p_flip(st, L)
+    if pf not in rig.keys():
+        # 예전 파일: 레이어에 저장된 좌우 반전 값을 한 번 옮겨 옴
+        raw = L.get("flip_x", False) if hasattr(L, "get") else False
+        rig[pf] = 1.0 if raw else 0.0
+    _ensure_float(rig, pf, 0.0, 0.0, 1.0)
 
 
 def _mirror_all(s, st):
@@ -3476,13 +3545,34 @@ def _names_tick():
     return None
 
 
+def _needs_flip_nodes(s, st):
+    """1.0.226: 좌우 반전이 키 가능한 리그 값 → 반전 노드가 없으면 재구성."""
+    if not st.built:
+        return False
+    mat = bpy.data.materials.get(_MAT_PREFIX + st.uid)
+    if mat is None or mat.node_tree is None:
+        return False
+    lst = _src_stack(s, st) if _mirror_all(s, st) else st
+    names = mat.node_tree.nodes.keys()
+    return any(_layer_image(s, L) is not None and L.kind != 'MOUTH'
+               and ("EYFX_%s_%s_0" % (lst.uid, L.lid)) not in names
+               for L in lst.layers)
+
+
 def parent_cell_migrate(s):
     """1.0.219: 자식이 부모의 위치·회전·크기·불투명도·색을 모두 따라감.
-    예전 자식(묶음 정보 없음)이 있으면 보이는 그대로 옮기고 재구성."""
+    예전 자식(묶음 정보 없음)이 있으면 보이는 그대로 옮기고 재구성.
+    1.0.226: 반전 노드가 없는 머티리얼도 재구성."""
     n = 0
     for st in s.eyes:
         if not any(layer_parent(st, L) is not None and not L.bind_ok
                    for L in st.layers):
+            try:
+                if _needs_flip_nodes(s, st):
+                    eye_build(s, st)
+                    n += 1
+            except Exception as e:
+                print("FSKR flip migrate:", e)
             continue
         if st.built:
             eye_build(s, st)
@@ -3738,7 +3828,13 @@ def _eye_mat(s, st, over=False):
             _ensure_anim_props(rig, xast, xaL)
             sfx = "" if own else ".in" + L.lid
             xmu, xmv = marker_uv(lst, X.tag)
-            xcu, xcv = _pivot_eff(X)
+            # 기준점: 반전(키 가능)에 따라 u -> 1-u. pcu = u + f·(1-2u)
+            if X.pivot == 'PART':
+                xcu, xcv = float(X.pivot_uv[0]), float(X.pivot_uv[1])
+            else:
+                xcu, xcv = 0.5, 0.5
+            fk = 1.0 - 2.0 * xcu
+            fvar = ("f", rig, '["%s"]' % _p_flip(xast, xaL))
             xmu, xmv = xmu + (xcu - 0.5), xmv + (xcv - 0.5)
             if own:
                 xn, xb, xcell = xname, xbind, cellx
@@ -3759,6 +3855,9 @@ def _eye_mat(s, st, over=False):
             # 대칭 복사본은 반전된 공간이라 시선 좌우를 뒤집어 같은 방향을 봄
             ex, ey, pairs_x, pairs_y = move_exprs(X, xast, xaL, xmu, xmv,
                                                   -1.0 if ci else 1.0)
+            if abs(fk) > 1e-9:
+                ex += "-f*(%.6g)" % fk
+                pairs_x = list(pairs_x) + [fvar]
             _drv_vars(sh.inputs["Location"], 0, ex, pairs_x)
             _drv_vars(sh.inputs["Location"], 1, ey, pairs_y)
             out = sh.outputs[0]
@@ -3800,6 +3899,9 @@ def _eye_mat(s, st, over=False):
             sc.label = "%s: size" % lbl
             link(out, sc.inputs["Vector"])
             sc.inputs["Location"].default_value = (xcu, xcv, 0.0)
+            if abs(fk) > 1e-9:
+                _drv_vars(sc.inputs["Location"], 0,
+                          "%.6g+f*(%.6g)" % (xcu, fk), [fvar])
             spx = ("sx", rig, '["%s"]' % _p_sx(xast, xaL))
             _drv_vars(sc.inputs["Scale"], 0, "1/max(sx,0.001)", [spx])
             if X.scale_lock:   # 고정: 세로 = 가로 × 켤 때의 비율
@@ -3892,8 +3994,9 @@ def _eye_mat(s, st, over=False):
             except Exception:
                 bb = None
         u0, u1, v0, v1 = bb if bb else (0.0, 1.0, 0.0, 1.0)
-        if L.flip_x:
-            u0, u1 = 1.0 - u1, 1.0 - u0
+        # 좌우 반전(키 가능)이면 그림 영역이 (1-u1, 1-u0)로 = 좌우 모두 +f·d
+        fd = 1.0 - u0 - u1
+        fvar_c = ("f", rig, '["%s"]' % _p_flip(ast, aL))
         cw_, ch_ = u1 - u0, v1 - v0
         crop_n = {}
         # 0이면 그 방향은 무한히 열어 둠 (자식에게 물려줄 때 안 잘리게)
@@ -3923,11 +4026,21 @@ def _eye_mat(s, st, over=False):
                             lo, -1350, yv)
                 crop_n[side] = math('ADD' if side in ("t", "r")
                                     else 'SUBTRACT', edge, off, -1300, yv)
+                if side in ("l", "r") and abs(fd) > 1e-9:
+                    fn9 = node('ShaderNodeValue', -1350, yv - 30)
+                    fn9.label = "%s: flip crop %s" % (L.name, side)
+                    _drv_vars(fn9.outputs[0], None, "f*(%.6g)" % fd,
+                              [fvar_c])
+                    crop_n[side] = math('ADD', crop_n[side], fn9.outputs[0],
+                                        -1270, yv)
                 continue
             vn = node('ShaderNodeValue', -1300, yv)
             vn.label = "%s: crop %s" % (L.name, side)
-            _drv_vars(vn.outputs[0], None, expr,
-                      [("c", rig, '["%s"]' % _p_crop(ast, aL, side))])
+            cv9 = [("c", rig, '["%s"]' % _p_crop(ast, aL, side))]
+            if side in ("l", "r") and abs(fd) > 1e-9:
+                expr += "+f*(%.6g)" % fd
+                cv9.append(fvar_c)
+            _drv_vars(vn.outputs[0], None, expr, cv9)
             crop_n[side] = vn.outputs[0]
         samples = []
         cmask[L.lid] = []
@@ -3947,13 +4060,14 @@ def _eye_mat(s, st, over=False):
                             math('LESS_THAN', sq.outputs[1], crop_n["t"],
                                  -1200, yy - 270), -1100, yy - 250),
                        -1000, yy - 220)
-            if L.flip_x:  # 좌우 반전 (파츠 그림만)
-                fx = node('ShaderNodeMapping', -1300, yy,
-                          vector_type='POINT')
-                fx.inputs["Location"].default_value = (1.0, 0.0, 0.0)
-                fx.inputs["Scale"].default_value = (-1.0, 1.0, 1.0)
-                link(crd, fx.inputs["Vector"])
-                crd = fx.outputs[0]
+            # 좌우 반전 (파츠 그림만, 키 가능): u -> f + (1-2f)·u
+            fx = node('ShaderNodeMapping', -1300, yy, vector_type='POINT')
+            fx.name = "EYFX_%s_%s_%d" % (lst.uid, L.lid, ci)
+            fx.label = "%s: flip" % L.name
+            _drv_vars(fx.inputs["Location"], 0, "f", [fvar_c])
+            _drv_vars(fx.inputs["Scale"], 0, "1-2*f", [fvar_c])
+            link(crd, fx.inputs["Vector"])
+            crd = fx.outputs[0]
             sep = node('ShaderNodeSeparateXYZ', -1150, yy - 120)
             link(crd, sep.inputs[0])
             ins = math('MULTIPLY',
@@ -6567,7 +6681,7 @@ def key_layer(s, st, L, only=None, interp=None):
             continue
         # 고른 보간 방법을 방금 넣은 키와, 이 키로 들어오는 구간(바로 앞
         # 키)에 적용 — Blender의 보간은 '키 다음 구간'에 걸리기 때문
-        ip9 = 'CONSTANT' if p.endswith(("_Visible", "_vis")) else interp
+        ip9 = 'CONSTANT' if p.endswith(_CONST_SUFFIX) else interp
         for fc in AT._fcurves_for(rig, '["%s"]' % p):
             prev = None
             for kp in fc.keyframe_points:
@@ -6603,8 +6717,8 @@ def set_layer_interp(s, st, L, interp, selected_only=False):
     n = 0
     ast, aL = _anim_source(s, st, L)
     for p in _anim_props(ast, aL):
-        if p.endswith(("_Visible", "_vis")):
-            continue                 # 보이기는 항상 Constant
+        if p.endswith(_CONST_SUFFIX):
+            continue                 # 보이기·반전은 항상 Constant
         for fc in AT._fcurves_for(rig, '["%s"]' % p):
             for kp in fc.keyframe_points:
                 if selected_only and not kp.select_control_point:
@@ -6804,6 +6918,8 @@ class FSKR_OT_eye_place_reset(bpy.types.Operator):
             return {'CANCELLED'}
         _ensure_anim_props(rig, st, L)
         for p, v in zip(_anim_props(st, L), ANIM_DEFAULTS):
+            if p.endswith(("_Flip", "_flip")):
+                continue      # 배치 초기화는 반전은 그대로
             rig[p] = v
         rig.update_tag()
         _redraw_ui(context)

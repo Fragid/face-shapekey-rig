@@ -1364,8 +1364,7 @@ def layer_states_capture(s, st):
     if rig is None:
         return out
     for L in st.layers:
-        d = _layer_state(s, st, L, rig)
-        d["flip_x"] = bool(L.flip_x)
+        d = _layer_state(s, st, L, rig)     # 반전(flip)은 리그 값으로 포함
         d["sym"] = bool(L.sym)
         out[L.lid] = d
     return out
@@ -1382,6 +1381,9 @@ def layer_states_apply(s, st, states, key=False):
         if not d:
             continue
         EY._ensure_anim_props(rig, st, L)
+        if "flip" not in d and "flip_x" in d:   # 1.0.225까지 저장한 폴더
+            d = dict(d)
+            d["flip"] = 1.0 if d["flip_x"] else 0.0
         for k, p in zip(EY.ANIM_KEYS, EY._anim_props(st, L)):
             if k in d:
                 rig[p] = d[k]
@@ -1401,7 +1403,7 @@ def layer_states_apply(s, st, states, key=False):
             rig[p] = d["cell"]
             if key:
                 AT._key(rig, p)
-        for a in ("flip_x", "sym"):
+        for a in ("sym",):
             if a in d and bool(getattr(L, a)) != bool(d[a]):
                 L[a] = bool(d[a])
                 rebuild = True

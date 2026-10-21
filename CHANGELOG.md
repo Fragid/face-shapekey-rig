@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.226
+
+### Changed
+- **Flip H is now a keyable rig property** (`<part>_Flip`, always Constant).
+  It is keyed with *Key this part* and auto-key, and saved in expression
+  presets and part folders.
+
+### Fixed
+- Switching expressions left a part's Flip H as it was, because presets did
+  not store it. Presets saved before this version have no flip value and
+  leave it unchanged; re-save them once if they need a different flip.
+
 ## v1.0.225
 
 ### Fixed
