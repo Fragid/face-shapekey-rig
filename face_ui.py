@@ -2957,7 +2957,10 @@ def draw_part_props(col, context, s, st, L, rig, mouth_panel=False):
     P = EY._anim_props(ast, aL)
     b = col.box().column(align=True)
     r = b.row(align=True)
-    if x is not None:
+    if x is not None and EY.preset_editing(s):
+        r.label(text=_tr("배치 (마커 기준)") + "  ·  " + _tr("이 표정"),
+                icon='OBJECT_ORIGIN')
+    elif x is not None:
         r.label(text=_tr("배치 (마커 기준)") + "  ·  "
                 + (_tr("이 칸 %d-%d") % tuple(x.cur)), icon='OBJECT_ORIGIN')
         op = r.operator("fskr.cell_place_reset", text="", icon='LOOP_BACK')
@@ -2968,6 +2971,11 @@ def draw_part_props(col, context, s, st, L, rig, mouth_panel=False):
         op.uid, op.lid = ast.uid, aL.lid
         op = r.operator("fskr.eye_key", text="", icon='KEY_HLT')
         op.uid, op.lid, op.what = ast.uid, aL.lid, 'ANIM'
+    if x is not None and EY.preset_editing(s):
+        h9 = b.row()
+        h9.active = False
+        h9.label(text=_tr("프리셋 편집 중: 여기서 바꾼 값은 이 표정에만 "
+                          "저장됩니다 (칸 보정은 그대로)"), icon='INFO')
     tr9 = b.row()
     tr9.scale_y = 1.2
     op = tr9.operator("fskr.part_transform", icon='FULLSCREEN_ENTER',
@@ -3728,7 +3736,8 @@ class _PartTransformBase:
         sx = max(1e-4, sx)
         sy = max(1e-4, sy)
         x = EY.cell_table(self._s(), self._st(), L) if self.cell else None
-        if x is not None and not x.others():
+        if x is not None and not x.others() and \
+                not EY.preset_editing(self._s()):
             # 빠른 길: 지금 칸 값만 직접 쓰고 조회표는 한 번만 갱신
             P9 = x.P
             bx = EY._cx_base(rig, P9, "px", 0.0)

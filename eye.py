@@ -1861,6 +1861,25 @@ def _mk_cx(key):
             return
         base = _cx_base(x.s.rig, x.P, key, d)
         old = get(self)
+        if preset_editing(x.s):
+            # 프리셋(표정) 편집 중: 칸 보정은 그대로 두고 이 표정의 값(키
+            # 가능한 공통 값)을 바꿈. 칸 보정은 그 칸을 쓰는 모든 표정에
+            # 같이 걸리기 때문 (다른 표정까지 바뀌던 문제)
+            e = x.entry(*x.cur)
+            rig = x.s.rig
+            if key == "op":
+                lop = float(e.lop) if e is not None else 1.0
+                rig[x.P["op"]] = (float(v) / lop) if abs(lop) > 1e-6 \
+                    else float(v)
+            else:
+                add = float(getattr(e, _CX_ADD[key])) if e is not None \
+                    else 0.0
+                rig[x.P[key]] = float(v) - add
+            try:
+                rig.update_tag()
+            except Exception:
+                pass
+            return
         others = x.others()
         e = x.ensure(*x.cur)
         if key == "op":
@@ -1900,10 +1919,26 @@ def _mk_cx_size(which):
         sx = max(_cx_base(x.s.rig, x.P, "sx", 1.0), 1e-6)
         sy = max(_cx_syb(x.s.rig, self, x.P), 1e-6)
         old = max(get(self), 1e-9)
-        others = x.others()
-        e = x.ensure(*x.cur)
         v = max(float(v), 1e-4)
         k = v / old
+        if preset_editing(x.s):
+            # 프리셋 편집 중: 이 표정의 크기(공통 값)를 바꿈, 칸 보정은 그대로
+            e = x.entry(*x.cur)
+            rig = x.s.rig
+            both = which == 'both' or cx_locked(self, e)
+            if both or which == 'x':
+                rig[x.P["sx"]] = sx * k
+            if (both or which == 'y') and not self.scale_lock:
+                rig[x.P["sy"]] = sy * k
+            elif which == 'y' and self.scale_lock:
+                rig[x.P["sx"]] = sx * k
+            try:
+                rig.update_tag()
+            except Exception:
+                pass
+            return
+        others = x.others()
+        e = x.ensure(*x.cur)
         # 🔗 = 지금 가로세로 비율을 지킨 채 같이 커지고 작아짐
         both = which == 'both' or cx_locked(self, e)
         if both:

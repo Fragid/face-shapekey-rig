@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.227
+
+### Fixed
+- Editing an expression preset changed other expressions too. For parts with
+  several cells, the placement box edits the **cell offset**, which applies to
+  every expression that uses that cell, so moving the eyelid or cropping the
+  eye white while editing one preset also changed the others. While a preset
+  is being edited, the placement box (position, size, rotation, opacity, crop)
+  and Ctrl+T free transform now change **that expression's own values** and
+  leave cell offsets alone. The box title shows "This expression" while
+  editing.
+
 ## v1.0.226
 
 ### Changed
