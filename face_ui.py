@@ -1555,6 +1555,7 @@ class FSKR_OT_preset_edit(bpy.types.Operator):
 
     action: bpy.props.EnumProperty(
         items=(('START', "편집 시작", ""), ('SAVE', "저장하고 끝내기", ""),
+               ('SAVE_KEY', "저장하고 이 프레임에 키", ""),
                ('CANCEL', "취소", "")), options={'HIDDEN', 'SKIP_SAVE'})
 
     @classmethod
@@ -1562,7 +1563,11 @@ class FSKR_OT_preset_edit(bpy.types.Operator):
         a = getattr(props, "action", 'START')
         if a == 'SAVE':
             return _tr("지금 파츠 상태를 이 프리셋에 덮어쓰고, 멈췄던 키프레임을 "
-                       "되살립니다")
+                       "되살립니다. 화면은 키프레임에 들어간 표정으로 "
+                       "돌아갑니다")
+        if a == 'SAVE_KEY':
+            return _tr("이 프리셋에 덮어쓰고 키프레임을 되살린 뒤, 이 표정을 "
+                       "현재 프레임에 키로 넣습니다 (이 프레임부터 이 표정)")
         if a == 'CANCEL':
             return _tr("저장하지 않고 끝냅니다 (멈췄던 키프레임을 되살림)")
         return _tr("키프레임을 잠시 멈추고 이 프리셋의 파츠를 고칩니다. 그동안 "
@@ -1580,12 +1585,37 @@ class FSKR_OT_preset_edit(bpy.types.Operator):
             if not st.preset_edit:
                 preset_edit_begin(context, s, st)
         else:
-            if self.action == 'SAVE' and \
-                    0 <= st.preset_index < len(st.presets):
+            idx = st.preset_index
+            saved = False
+            if self.action in ('SAVE', 'SAVE_KEY') and \
+                    0 <= idx < len(st.presets):
                 bpy.ops.fskr.face_preset_save('EXEC_DEFAULT', overwrite=True)
-                self.report({'INFO'}, _tr("프리셋 저장: ")
-                            + st.presets[st.preset_index].name)
+                saved = True
             preset_edit_end(context, s, st)
+            if saved and self.action == 'SAVE_KEY':
+                bpy.ops.fskr.face_preset_apply('EXEC_DEFAULT', index=idx,
+                                               key=True)
+                self.report({'INFO'}, _tr("프리셋 저장 + 이 프레임에 키: ")
+                            + st.presets[idx].name)
+            elif saved:
+                # 키프레임이 되살아나면 화면은 그 프레임에 키로 들어간 표정으로
+                # 돌아감 → 다른 표정이면 알려 줌 (편집한 표정이 사라진 것처럼
+                # 보이는 혼란 방지)
+                cur = -1
+                try:
+                    from .preset_vp import prop_name
+                    cur = int(round(float(s.rig.get(prop_name(st), -1))))
+                except Exception:
+                    pass
+                if 0 <= cur < len(st.presets) and cur != idx:
+                    self.report({'WARNING'}, (_tr(
+                        "'%s' 저장됨. 이 프레임은 키프레임에 들어간 표정 "
+                        "'%s'(으)로 돌아갔습니다. 여기서 쓰려면 목록의 🔑 "
+                        "또는 '저장하고 이 프레임에 키'") % (
+                        st.presets[idx].name, st.presets[cur].name)))
+                else:
+                    self.report({'INFO'}, _tr("프리셋 저장: ")
+                                + st.presets[idx].name)
         _redraw_ui(context)
         return {'FINISHED'}
 
@@ -2643,6 +2673,9 @@ class FSKR_PT_f5_presets(_SpritePanel, bpy.types.Panel):
                        icon='CHECKMARK').action = 'SAVE'
             r.operator("fskr.preset_edit", text=_tr("취소"),
                        icon='X').action = 'CANCEL'
+            r = eb.row(align=True)
+            r.operator("fskr.preset_edit", text=_tr("저장하고 이 프레임에 키"),
+                       icon='KEY_HLT').action = 'SAVE_KEY'
         else:
             r = col.row(align=True)
             r.scale_y = 1.2
@@ -2900,6 +2933,9 @@ def draw_part_props(col, context, s, st, L, rig, mouth_panel=False):
                    icon='CHECKMARK').action = 'SAVE'
         r.operator("fskr.preset_edit", text=_tr("취소"),
                    icon='X').action = 'CANCEL'
+        r = pb.row(align=True)
+        r.operator("fskr.preset_edit", text=_tr("저장하고 이 프레임에 키"),
+                   icon='KEY_HLT').action = 'SAVE_KEY'
 
     # 그림
     b = col.box().column()

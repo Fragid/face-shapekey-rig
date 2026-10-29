@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.229
+
+### New
+- **Save and key at this frame** while editing a preset: saves the preset,
+  restores the paused keyframes, then keys the edited expression at the
+  current frame.
+
+### Changed
+- **Save and finish** now warns when the frame goes back to a different
+  keyed expression. Previously the edited expression seemed to vanish,
+  because the restored keyframes showed the expression keyed at that frame.
+
 ## v1.0.228
 
 ### New
