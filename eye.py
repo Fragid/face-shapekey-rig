@@ -470,6 +470,66 @@ def _vis_raw(rig, L, v):
         pass
 
 
+def _side_prop(L):
+    st = _owner(L)
+    rig = _rig()
+    if st is None or rig is None:
+        return None, None
+    try:
+        ast, aL = _anim_source(bpy.context.scene.fskr, st, L)
+    except Exception:
+        ast, aL = st, L
+    return rig, _p_side(ast, aL)
+
+
+def _side_get(L):
+    rig, p = _side_prop(L)
+    if rig is None or p not in rig.keys():
+        return 0
+    try:
+        return max(0, min(2, int(round(float(rig[p])))))
+    except Exception:
+        return 0
+
+
+def _side_set(L, v):
+    rig, p = _side_prop(L)
+    if rig is None:
+        return
+    rig[p] = float(v)
+    st = _owner(L)
+    try:
+        rig.update_tag()
+        ob = bpy.data.objects.get(st.target) if st else None
+        if ob is not None:
+            ob.update_tag()
+    except Exception:
+        pass
+    # 보일 쪽 노드가 없는 예전 머티리얼이면 한 번 다시 만들기
+    try:
+        mat = bpy.data.materials.get(_MAT_PREFIX + st.uid) if st else None
+        lst = _src_stack(bpy.context.scene.fskr, st) if st else None
+        nm = "EYSD_%s_%s_0" % (lst.uid if lst else "", L.lid)
+        if st is not None and st.built and L.sym and (
+                mat is None or mat.node_tree is None
+                or nm not in mat.node_tree.nodes):
+            eye_build(bpy.context.scene.fskr, st)
+    except Exception as e:
+        print("FSKR side rebuild:", e)
+
+
+def sym_side_label(s, st, L):
+    """원본이 화면(정면) 기준 어느 쪽인지: 'L' / 'R' / ''."""
+    try:
+        W = layer_world_aff(s, st, L)
+        u, _v = aff_apply(W, 0.5, 0.5)
+        if abs(u - 0.5) < 0.01:
+            return ""
+        return "L" if u < 0.5 else "R"
+    except Exception:
+        return ""
+
+
 def _flip_prop(L):
     st = _owner(L)
     rig = _rig()
@@ -2146,6 +2206,15 @@ class FSKR_EyeLayer(bpy.types.PropertyGroup):
         name="대칭 복사", default=False, update=_rebuild_cb,
         description="데칼 가운데를 기준으로 반대쪽에 거울처럼 하나 더 "
                     "그립니다 (땀방울, 빗금 등)")
+    sym_side: bpy.props.EnumProperty(
+        name="보일 쪽",
+        items=(('BOTH', "양쪽", "원본과 복사본 모두"),
+               ('ORIG', "원본만", "원래 놓은 쪽만 (복사본 숨김)"),
+               ('COPY', "복사본만", "대칭 복사된 반대쪽만 (원본 숨김). "
+                "윙크처럼 반대쪽 눈에만 쓸 때")),
+        get=lambda s_: _side_get(s_), set=lambda s_, v: _side_set(s_, v),
+        description="대칭 복사일 때 어느 쪽을 보일지. 리그 프로퍼티라 키·표정 "
+                    "프리셋·파츠 폴더에 들어갑니다")
     hue: bpy.props.FloatProperty(
         name="색조", default=0.0, min=-0.5, max=0.5, precision=3,
         update=lambda s, c: _hsv_update(s, c),
@@ -2803,19 +2872,27 @@ def _p_flip(st, L):
     return (k + "_Flip") if k else "fskr_ey_%s_%s_flip" % (st.uid, L.lid)
 
 
+def _p_side(st, L):
+    """대칭 복사일 때 보일 쪽: 0 = 양쪽, 1 = 원본만, 2 = 복사본만.
+    키·프리셋·폴더에 들어감 (Constant). 윙크 등 한쪽만 쓸 때."""
+    k = _pk(L)
+    return (k + "_Side") if k else "fskr_ey_%s_%s_side" % (st.uid, L.lid)
+
+
 def _anim_props(st, L):
     return (_p_op(st, L), _p_px(st, L), _p_py(st, L), _p_sx(st, L),
             _p_sy(st, L), _p_rot(st, L),
             _p_crop(st, L, "t"), _p_crop(st, L, "b"),
             _p_crop(st, L, "l"), _p_crop(st, L, "r"), _p_vis(st, L),
-            _p_flip(st, L))
+            _p_flip(st, L), _p_side(st, L))
 
 
 ANIM_KEYS = ("op", "px", "py", "sx", "sy", "rot", "ct", "cb", "cl", "cr",
-             "vis", "flip")
-ANIM_DEFAULTS = (1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
-CONST_KEYS = ("vis", "flip")   # 항상 Constant 보간 (켜짐/꺼짐)
-_CONST_SUFFIX = ("_Visible", "_vis", "_Flip", "_flip")
+             "vis", "flip", "side")
+ANIM_DEFAULTS = (1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                 0.0)
+CONST_KEYS = ("vis", "flip", "side")   # 항상 Constant 보간 (켜짐/꺼짐)
+_CONST_SUFFIX = ("_Visible", "_vis", "_Flip", "_flip", "_Side", "_side")
 
 
 def _ensure_anim_props(rig, st, L):
@@ -2840,6 +2917,7 @@ def _ensure_anim_props(rig, st, L):
         raw = L.get("flip_x", False) if hasattr(L, "get") else False
         rig[pf] = 1.0 if raw else 0.0
     _ensure_float(rig, pf, 0.0, 0.0, 1.0)
+    _ensure_float(rig, _p_side(st, L), 0.0, 0.0, 2.0)
 
 
 def _mirror_all(s, st):
@@ -3590,7 +3668,9 @@ def _needs_flip_nodes(s, st):
     lst = _src_stack(s, st) if _mirror_all(s, st) else st
     names = mat.node_tree.nodes.keys()
     return any(_layer_image(s, L) is not None and L.kind != 'MOUTH'
-               and ("EYFX_%s_%s_0" % (lst.uid, L.lid)) not in names
+               and (("EYFX_%s_%s_0" % (lst.uid, L.lid)) not in names
+                    or (L.sym and ("EYSD_%s_%s_0" % (lst.uid, L.lid))
+                        not in names))
                for L in lst.layers)
 
 
@@ -4197,6 +4277,18 @@ def _eye_mat(s, st, over=False):
                                                     else 0], -540,
                                   y - ci * 260 - 40)
                 ns.append((c9, a9))
+            samples = ns
+        if len(samples) > 1:  # 대칭 복사: 보일 쪽 (양쪽 / 원본만 / 복사본만)
+            sv9 = [("v", rig, '["%s"]' % _p_side(ast, aL))]
+            ns = []
+            for ci, (c9, a9) in enumerate(samples):
+                sd = node('ShaderNodeValue', -560, y - ci * 260 - 80)
+                sd.name = "EYSD_%s_%s_%d" % (lst.uid, L.lid, ci)
+                sd.label = "%s: side %s" % (L.name, "copy" if ci else "orig")
+                _drv_vars(sd.outputs[0], None,
+                          "1-(v>0.5)*(v<1.5)" if ci else "1-(v>1.5)", sv9)
+                ns.append((c9, math('MULTIPLY', a9, sd.outputs[0], -520,
+                                    y - ci * 260 - 60)))
             samples = ns
         col, a = samples[0]
         if len(samples) > 1:  # 원본 위에 대칭 복사본 (겹치면 원본 우선)
@@ -6953,8 +7045,8 @@ class FSKR_OT_eye_place_reset(bpy.types.Operator):
             return {'CANCELLED'}
         _ensure_anim_props(rig, st, L)
         for p, v in zip(_anim_props(st, L), ANIM_DEFAULTS):
-            if p.endswith(("_Flip", "_flip")):
-                continue      # 배치 초기화는 반전은 그대로
+            if p.endswith(("_Flip", "_flip", "_Side", "_side")):
+                continue      # 배치 초기화는 반전·보일 쪽은 그대로
             rig[p] = v
         rig.update_tag()
         _redraw_ui(context)

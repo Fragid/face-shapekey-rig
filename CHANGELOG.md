@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.228
+
+### New
+- **Symmetry copy: show side.** With Symmetry copy on, choose **Both /
+  Original only / Copy only**. Use one mirrored part for a wink (a closed
+  eyelid on one eye only) and it stays perfectly symmetric with the other
+  side. The panel shows which side is the original on screen. It is a rig
+  property (`<part>_Side`, always Constant), so it is keyed and saved in
+  expression presets and part folders.
+
 ## v1.0.227
 
 ### Fixed

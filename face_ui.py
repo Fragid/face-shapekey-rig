@@ -2995,6 +2995,17 @@ def draw_part_props(col, context, s, st, L, rig, mouth_panel=False):
     r = b.row(align=True)
     r.prop(L, "flip_x", toggle=True, icon='MOD_MIRROR')
     r.prop(L, "sym", toggle=True, icon='MOD_MIRROR')
+    if L.sym:   # 대칭 복사: 보일 쪽 (윙크 등)
+        r = b.row(align=True)
+        r.prop(L, "sym_side", expand=True)
+        sd9 = EY.sym_side_label(s, st, L)
+        if sd9:
+            h9 = b.row()
+            h9.active = False
+            h9.label(text=_tr("원본 = 화면 왼쪽, 복사본 = 화면 오른쪽")
+                     if sd9 == "L" else
+                     _tr("원본 = 화면 오른쪽, 복사본 = 화면 왼쪽"),
+                     icon='INFO')
     # 키: 이 파츠의 지금 값 전부 (칸·배치·불투명도·크롭)
     b.separator(factor=0.5)
     kb = b.row(align=True)
