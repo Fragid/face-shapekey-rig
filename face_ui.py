@@ -1244,7 +1244,7 @@ class FSKR_OT_part_add(bpy.types.Operator):
         L["image"] = sh.image
         L["cols"] = sh.cols
         L["rows"] = sh.rows
-        L["sym"] = g.sym
+        L["sym"] = g.sym     # 리그 값은 처음 만들 때 이 값으로 (마이그레이션)
         L["look"] = g.look
         L["over"] = g.over
         # 새 파츠 위치: 선택한 파츠 바로 위. 선택이 없으면 같은 태그의
@@ -1364,8 +1364,7 @@ def layer_states_capture(s, st):
     if rig is None:
         return out
     for L in st.layers:
-        d = _layer_state(s, st, L, rig)     # 반전(flip)은 리그 값으로 포함
-        d["sym"] = bool(L.sym)
+        d = _layer_state(s, st, L, rig)  # 반전·대칭은 리그 값으로 포함
         out[L.lid] = d
     return out
 
@@ -1386,7 +1385,10 @@ def layer_states_apply(s, st, states, key=False):
             d["flip"] = 1.0 if d["flip_x"] else 0.0
         for k, p in zip(EY.ANIM_KEYS, EY._anim_props(st, L)):
             if k in d:
-                rig[p] = d[k]
+                rig[p] = float(d[k])   # 예전 폴더의 bool(sym)도 숫자로
+                if k == "sym" and d[k] and not L.get("sym_built", False):
+                    L["sym_built"] = True
+                    rebuild = True
                 if key:
                     _key_const(rig, p)
         ait = EY._layer_atlas(s, L)
@@ -1403,10 +1405,6 @@ def layer_states_apply(s, st, states, key=False):
             rig[p] = d["cell"]
             if key:
                 AT._key(rig, p)
-        for a in ("sym",):
-            if a in d and bool(getattr(L, a)) != bool(d[a]):
-                L[a] = bool(d[a])
-                rebuild = True
     if rebuild:
         EY.eye_build(s, st)
     try:

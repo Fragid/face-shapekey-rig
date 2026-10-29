@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.230
+
+### Changed
+- **Symmetry copy is now a keyable rig property** (`<part>_Mirror`, always
+  Constant). It is keyed and saved in expression presets and part folders, so
+  each expression can turn the mirrored copy on or off. A part that has had
+  Symmetry copy on keeps its copy built and only toggles its visibility, so
+  switching updates live during playback. Presets saved before this version
+  have no symmetry value and leave it unchanged.
+
 ## v1.0.229
 
 ### New

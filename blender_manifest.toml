@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "face_shapekey_rig"
-version = "1.0.229"
+version = "1.0.230"
 name = "Face Shape Key Rig"
 tagline = "Sprite face parts and shape key controllers for 3D characters"
 maintainer = "thwotkd123"
