@@ -13,6 +13,7 @@ from mathutils import Vector, geometry
 from bpy_extras import view3d_utils
 
 from .core import (
+    kfi,
     _EN,
     _JA,
     _ZH,
@@ -1418,7 +1419,7 @@ def layer_states_apply(s, st, states, key=False):
 
 def _key_const(rig, prop):
     try:
-        rig.keyframe_insert(data_path='["%s"]' % prop, group="Expression")
+        kfi(rig, data_path='["%s"]' % prop, group="Expression")
         AT._make_constant(rig, '["%s"]' % prop)
     except Exception:
         pass
@@ -2686,6 +2687,8 @@ class FSKR_PT_f5_presets(_SpritePanel, bpy.types.Panel):
             vb = col.box().column(align=True)
             vb.label(text=_tr("뷰포트 컨트롤러 (표정 목록)"),
                      icon='ARMATURE_DATA')
+            from .core import draw_keying_warning
+            draw_keying_warning(vb)
             if not pre_exists(s.rig, st):
                 r = vb.row()
                 r.scale_y = 1.3

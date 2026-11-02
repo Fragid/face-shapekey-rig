@@ -9,7 +9,7 @@
 Mapping 노드를 드라이버로 밀어서 칸을 바꾼다.
 """
 import bpy
-from .core import app_handler_add, draw_add, draw_remove
+from .core import app_handler_add, draw_add, draw_remove, kfi
 import bpy.utils.previews
 import json
 import re
@@ -367,7 +367,7 @@ def _key(rig, prop, frame=None):
         frame = bpy.context.scene.frame_current
     path = '["%s"]' % prop
     try:
-        rig.keyframe_insert(data_path=path, frame=frame, group="Sprite Sheet")
+        kfi(rig, data_path=path, frame=frame, group="Sprite Sheet")
     except Exception:
         return
     _make_constant(rig, path)
@@ -2866,7 +2866,7 @@ def _write_runs(rig, prop, runs, end_val, start, n, prev):
     """(값, 길이) 목록을 Constant 키로 기록 (범위 안의 이전 키는 지움)."""
     path = '["%s"]' % prop
     try:
-        rig.keyframe_insert(data_path=path, frame=start, group="Sprite Sheet")
+        kfi(rig, data_path=path, frame=start, group="Sprite Sheet")
     except Exception:
         return False
     fcs = _fcurves_for(rig, path)

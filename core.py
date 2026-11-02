@@ -8,6 +8,32 @@ import threading
 from gpu_extras.batch import batch_for_shader
 from math import radians, cos, sin
 from mathutils import Vector, Matrix
+
+
+def kfi(owner, *args, **kw):
+    """keyframe_insert, Blender 환경설정의 'Only Insert Available'·'Only
+    Insert Needed'에 막히지 않게 잠시 끄고 넣는다 (애드온이 넣는 키는 항상
+    새 채널일 수 있음). 결과(성공 여부)를 돌려준다."""
+    ed = None
+    old = {}
+    try:
+        ed = bpy.context.preferences.edit
+        for a in ("use_keyframe_insert_available",
+                  "use_keyframe_insert_needed"):
+            if getattr(ed, a, False):
+                old[a] = True
+                setattr(ed, a, False)
+    except Exception:
+        ed = None
+    try:
+        return owner.keyframe_insert(*args, **kw)
+    finally:
+        if ed is not None:
+            for a in old:
+                try:
+                    setattr(ed, a, True)
+                except Exception:
+                    pass
 from bpy_extras import view3d_utils
 from bpy_extras.io_utils import ExportHelper, ImportHelper
 from http.server import (BaseHTTPRequestHandler,
@@ -2699,6 +2725,23 @@ def _panel_follow_update(self, context):
     _panel_follow_bind(self, context.scene)
 
 
+def draw_keying_warning(layout):
+    """Blender 환경설정 'Only Insert Available'이 켜져 있으면 손잡이에 처음
+    키를 넣을 수 없음 → 경고 + 끄기 버튼."""
+    try:
+        ed = bpy.context.preferences.edit
+        if not getattr(ed, "use_keyframe_insert_available", False):
+            return
+    except Exception:
+        return
+    b = layout.box().column(align=True)
+    b.alert = True
+    b.label(text=_tr("Blender 설정 'Only Insert Available'이 켜져 있어 "
+                     "컨트롤러 손잡이에 새 키가 들어가지 않습니다"),
+            icon='ERROR')
+    b.operator("fskr.keying_prefs_fix", icon='CHECKMARK')
+
+
 def draw_panel_follow(layout, s):
     """패널(그랩 바) 위치 + 캐릭터 따라다니기 설정 (두 방식 공통)."""
     pbr = (s.rig.pose.bones.get("FP_root")
@@ -5388,12 +5431,12 @@ def _mocap_apply(s, rig):
         pb.location[0] = pb.location[0] * sm + x * (1.0 - sm)
         pb.location[1] = pb.location[1] * sm + y * (1.0 - sm)
         if rec and playing:
-            pb.keyframe_insert("location",
+            kfi(pb, "location",
                                group=str(pb.get("fskr_label", h)))
     for kb, val in key_acc.items():
         kb.value = kb.value * sm + val * (1.0 - sm)
         if rec and playing:
-            kb.keyframe_insert("value")
+            kfi(kb, "value")
     # 머리/목 회전 적용 (피치→X, 요→Y, 롤→Z, 본 로컬 기준)
     if hb is not None and hd is not None:
         g = float(s.mocap_head_gain)
@@ -5412,7 +5455,7 @@ def _mocap_apply(s, rig):
             hb.rotation_euler[i3] = (hb.rotation_euler[i3] * sm
                                      + tgtr[i3] * (1.0 - sm))
         if rec and playing:
-            hb.keyframe_insert("rotation_euler")
+            kfi(hb, "rotation_euler")
 
 
 def _draw_mocap_preview():
@@ -5594,7 +5637,7 @@ def _blend_step(rec_playing=False):
         pb.location[0] = sx + (tx - sx) * p
         pb.location[1] = sy + (ty - sy) * p
         if rec_playing:
-            pb.keyframe_insert("location",
+            kfi(pb, "location",
                                group=str(pb.get("fskr_label", pb.name)))
     if done:
         _MOCAP["blend"] = None
@@ -11985,4 +12028,30 @@ _JA.update({
 _ZH.update({
     "데칼 가운데를 기준으로 반대쪽에 거울처럼 하나 더 그립니다 (땀방울, 빗금 등). 리그 프로퍼티라 키·표정 프리셋·파츠 폴더에 들어갑니다":
         "以贴花中心为基准在另一侧镜像再画一个（汗滴、斜线等）。它是绑定属性，因此会被打关键帧，并保存到表情预设和部件文件夹中",
+})
+
+# 1.0.231: 키 넣기 환경설정 안내
+_EN.update({
+    "Blender 설정 'Only Insert Available'이 켜져 있어 컨트롤러 손잡이에 새 키가 들어가지 않습니다":
+        "Blender's 'Only Insert Available' preference is on, so new keys can't be added to controller handles",
+    "Only Insert Available 끄기": "Turn off Only Insert Available",
+    "Preferences → Animation → Keyframes의 'Only Insert Available'을 끕니다. 켜져 있으면 키가 한 번도 없던 본(컨트롤러 손잡이 등)에 I로 키를 넣을 수 없습니다":
+        "Turns off 'Only Insert Available' in Preferences → Animation → Keyframes. While it is on, I can't key bones that have never been keyed (such as controller handles)",
+    "'Only Insert Available'을 껐습니다": "Turned off 'Only Insert Available'",
+})
+_JA.update({
+    "Blender 설정 'Only Insert Available'이 켜져 있어 컨트롤러 손잡이에 새 키가 들어가지 않습니다":
+        "Blenderの設定「Only Insert Available」がオンのため、コントローラーのハンドルに新しいキーが入りません",
+    "Only Insert Available 끄기": "Only Insert Available をオフ",
+    "Preferences → Animation → Keyframes의 'Only Insert Available'을 끕니다. 켜져 있으면 키가 한 번도 없던 본(컨트롤러 손잡이 등)에 I로 키를 넣을 수 없습니다":
+        "Preferences → Animation → Keyframes の「Only Insert Available」をオフにします。オンの間は、一度もキーがないボーン（コントローラーのハンドルなど）に I でキーを入れられません",
+    "'Only Insert Available'을 껐습니다": "「Only Insert Available」をオフにしました",
+})
+_ZH.update({
+    "Blender 설정 'Only Insert Available'이 켜져 있어 컨트롤러 손잡이에 새 키가 들어가지 않습니다":
+        "Blender 设置「Only Insert Available」已开启，无法为控制器手柄添加新关键帧",
+    "Only Insert Available 끄기": "关闭 Only Insert Available",
+    "Preferences → Animation → Keyframes의 'Only Insert Available'을 끕니다. 켜져 있으면 키가 한 번도 없던 본(컨트롤러 손잡이 등)에 I로 키를 넣을 수 없습니다":
+        "关闭 Preferences → Animation → Keyframes 中的「Only Insert Available」。开启时，无法用 I 为从未打过关键帧的骨骼（如控制器手柄）打关键帧",
+    "'Only Insert Available'을 껐습니다": "已关闭「Only Insert Available」",
 })

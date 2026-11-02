@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.231
+
+### Fixed
+- Keys on viewport controller handles could silently fail when Blender's
+  **Only Insert Available** preference was on ("Could not create F-Curves"),
+  so moving a handle and keying it did nothing on playback. The controller
+  boxes now show a warning with a **Turn off Only Insert Available** button.
+  Keys the add-on inserts itself are never blocked by Only Insert Available /
+  Only Insert Needed.
+
 ## v1.0.230
 
 ### Changed

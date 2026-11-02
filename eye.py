@@ -17,7 +17,7 @@
 드라이버는 모두 Simple Expression이라 Python 자동 실행이 꺼져 있어도 동작.
 """
 import bpy
-from .core import app_handler_add, draw_add, draw_remove
+from .core import app_handler_add, draw_add, draw_remove, kfi
 import json
 import re
 from mathutils import Matrix, Vector
@@ -1130,7 +1130,7 @@ def _mk_gaze(i):
         try:
             ts = bpy.context.scene.tool_settings
             if self.autokey or ts.use_keyframe_insert_auto:
-                pb.keyframe_insert("location", index=i, group="Eye Gaze")
+                kfi(pb, "location", index=i, group="Eye Gaze")
         except Exception:
             pass
     return get, set_
@@ -6562,7 +6562,7 @@ def _copy_rig_prop(rig, src, dst):
             continue
         arr = hasattr(rig[dst], "__len__")
         try:
-            rig.keyframe_insert(data_path=path_d,
+            kfi(rig, data_path=path_d,
                                 index=fc.array_index if arr else -1,
                                 frame=kps[0].co.x,
                                 group=fc.group.name if fc.group else "")
@@ -6883,7 +6883,7 @@ def key_layer(s, st, L, only=None, interp=None):
         if only is not None and p not in only:
             continue
         try:
-            rig.keyframe_insert(data_path='["%s"]' % p, group="Face Parts")
+            kfi(rig, data_path='["%s"]' % p, group="Face Parts")
             n += 1
         except Exception:
             continue
@@ -7087,7 +7087,7 @@ class FSKR_OT_eye_key(bpy.types.Operator):
             _ensure_anim_props(rig, st, L)
             for p in _anim_props(st, L):
                 try:
-                    rig.keyframe_insert(data_path='["%s"]' % p,
+                    kfi(rig, data_path='["%s"]' % p,
                                         group="Eye Parts")
                 except Exception:
                     pass
@@ -7102,8 +7102,8 @@ class FSKR_OT_eye_key(bpy.types.Operator):
             pb = _gaze_bone(st)
             if pb is None:
                 return {'CANCELLED'}
-            pb.keyframe_insert("location", index=0, group="Eye Gaze")
-            pb.keyframe_insert("location", index=1, group="Eye Gaze")
+            kfi(pb, "location", index=0, group="Eye Gaze")
+            kfi(pb, "location", index=1, group="Eye Gaze")
         _redraw_ui(context)
         return {'FINISHED'}
 

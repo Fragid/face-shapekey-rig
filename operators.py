@@ -23,6 +23,7 @@ from .atlas import (
     atlas_snapshot,
 )
 from .core import (
+    kfi,
     _bone_world,
     _char_snapshot,
     _childof_set_inverse,
@@ -1649,11 +1650,11 @@ class FSKR_OT_bake_keys(bpy.types.Operator):
             for kd, nm in kchans:
                 kb = kd.key_blocks.get(nm)
                 if kb:
-                    kb.keyframe_insert("value", frame=f)
+                    kfi(kb, "value", frame=f)
             for ob5, bn, bi in bchans:
                 pb4 = ob5.pose.bones.get(bn)
                 if pb4:
-                    pb4.keyframe_insert("location", index=bi, frame=f)
+                    kfi(pb4, "location", index=bi, frame=f)
         scene.frame_set(cur)
         for kd, nm in kchans:
             kb = kd.key_blocks.get(nm)
@@ -2269,6 +2270,29 @@ def _fp_pose_state(pb):
 def _fp_pose_restore(pb, v):
     pb.location, pb.rotation_quaternion = v[0], v[1]
     pb.rotation_euler, pb.rotation_axis_angle, pb.scale = v[2], v[3], v[4]
+
+
+class FSKR_OT_keying_prefs_fix(bpy.types.Operator):
+    """환경설정 'Only Insert Available' 끄기 (손잡이에 첫 키가 들어가게)."""
+    bl_idname = "fskr.keying_prefs_fix"
+    bl_label = "Only Insert Available 끄기"
+    bl_description = ("Preferences → Animation → Keyframes의 'Only Insert "
+                      "Available'을 끕니다. 켜져 있으면 키가 한 번도 없던 "
+                      "본(컨트롤러 손잡이 등)에 I로 키를 넣을 수 없습니다")
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        try:
+            context.preferences.edit.use_keyframe_insert_available = False
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        try:
+            bpy.ops.wm.save_userpref()
+        except Exception:
+            pass
+        self.report({'INFO'}, _tr("'Only Insert Available'을 껐습니다"))
+        return {'FINISHED'}
 
 
 class FSKR_OT_pose_clear_guard(bpy.types.Operator):
@@ -3034,7 +3058,7 @@ class FSKR_OT_key_all(bpy.types.Operator):
         n = 0
         for pb in context.scene.fskr.rig.pose.bones:
             if _is_handle_name(pb.name):
-                pb.keyframe_insert("location",
+                kfi(pb, "location",
                                    group=str(pb.get("fskr_label", pb.name)))
                 n += 1
         n += atlas_key_all(context.scene.fskr)
@@ -4020,7 +4044,7 @@ class FSKR_OT_lipsync_apply(bpy.types.Operator):
 
         for (pb, axis), vals in ctl_arrays.items():
             try:
-                pb.keyframe_insert("location", index=axis, frame=start,
+                kfi(pb, "location", index=axis, frame=start,
                                    group=str(pb.get("fskr_label",
                                                     pb.name)))
             except Exception:
@@ -4029,7 +4053,7 @@ class FSKR_OT_lipsync_apply(bpy.types.Operator):
                         axis, vals)
         for kb, vals in key_arrays.items():
             try:
-                kb.keyframe_insert("value", frame=start)
+                kfi(kb, "value", frame=start)
             except Exception:
                 pass
             batch_write(kb.id_data, kb.path_from_id() + ".value", 0, vals)
