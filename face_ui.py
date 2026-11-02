@@ -1417,15 +1417,20 @@ def layer_states_apply(s, st, states, key=False):
         pass
 
 
-def _key_const(rig, prop):
+def _key_const(rig, prop, frame=None):
     try:
-        kfi(rig, data_path='["%s"]' % prop, group="Expression")
+        if frame is None:
+            kfi(rig, data_path='["%s"]' % prop, group="Expression")
+        else:
+            kfi(rig, data_path='["%s"]' % prop, frame=frame,
+                group="Expression")
         AT._make_constant(rig, '["%s"]' % prop)
     except Exception:
         pass
 
 
-def preset_apply(s, st, pr, groups, key):
+def preset_apply(s, st, pr, groups, key, frame=None):
+    """frame: 키를 넣을 프레임 (None = 현재 프레임)."""
     rig = s.rig
     if getattr(st, "preset_edit", False):
         key = False      # 프리셋 편집 중엔 키 없음
@@ -1448,7 +1453,7 @@ def preset_apply(s, st, pr, groups, key):
         if d is None:   # 이 표정에 없는 파츠는 숨김
             rig[props[0]] = 0.0
             if key:
-                _key_const(rig, props[0])
+                _key_const(rig, props[0], frame)
             continue
         if "vis" not in d:      # 보이기가 없던 때 저장한 프리셋 = 보임
             d = dict(d)
@@ -1461,21 +1466,21 @@ def preset_apply(s, st, pr, groups, key):
             if k in d:
                 rig[p] = d[k]
                 if key:
-                    _key_const(rig, p)
+                    _key_const(rig, p, frame)
         ait = EY._layer_atlas(s, L)
         if ait is not None and "mr" in d:
             pr_ = AT._prop_row(AT._row_source(s, ait))
             pc_ = AT._prop_col(ait)
             rig[pr_], rig[pc_] = d["mr"], d["mc"]
             if key:
-                AT._key(rig, pr_)
-                AT._key(rig, pc_)
+                AT._key(rig, pr_, frame)
+                AT._key(rig, pc_, frame)
         elif "cell" in d:
             p = EY._prop_cell(st, L)
             EY._ensure_prop(rig, p, EY._ncells(L))
             rig[p] = d["cell"]
             if key:
-                AT._key(rig, p)
+                AT._key(rig, p, frame)
     try:
         rig.update_tag()
         ob = bpy.data.objects.get(st.target)

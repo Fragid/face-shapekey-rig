@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.232
+
+### Fixed
+- Keys put on the expression list handle at frames other than the current one
+  only keyed the expression number, so the parts did not change there. Each
+  handle key now becomes a full expression key (number + all part values) at
+  its own frame.
+- With several canvases, only the canvas shown in the N-panel had a working
+  expression handle. All canvases' handles now sync.
+
 ## v1.0.231
 
 ### Fixed

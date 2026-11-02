@@ -394,6 +394,13 @@ def _absorb(scene, s, rig, st, n):
             if f == cur:
                 keep = i
                 continue
+            # 다른 프레임의 손잡이 키 = 그 프레임에 표정 전체 키
+            # (예전엔 표정 번호만 키 → 파츠는 안 바뀌던 문제)
+            try:
+                from .face_ui import preset_apply
+                preset_apply(s, st, st.presets[i], None, True, frame=f)
+            except Exception as e:
+                print("FSKR preset absorb:", e)
             rig[P] = i
             _key(rig, P, f)
         if keep is None:
@@ -478,7 +485,16 @@ def _sync(scene, from_frame=False):
         return
     if rig is None or rig.type != 'ARMATURE':
         return
-    st = _canvas(s)
+    # 캔버스가 여러 개면 N패널에서 고른 캔버스만이 아니라 컨트롤러가 있는
+    # 모든 캔버스를 동기화 (다른 캔버스를 보고 있으면 손잡이가 안 먹던 문제)
+    for st in list(s.eyes):
+        try:
+            _sync_one(scene, s, rig, st, from_frame)
+        except Exception as e:
+            print("FSKR preset vp sync:", e)
+
+
+def _sync_one(scene, s, rig, st, from_frame):
     if st is None:
         return
     if getattr(st, "preset_edit", False):
