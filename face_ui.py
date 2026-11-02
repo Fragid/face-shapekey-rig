@@ -1494,6 +1494,26 @@ def _fskr_paths(s):
     return {'["%s"]' % n for n in EY._all_prop_names(s)}
 
 
+def unmute_leftover(s):
+    """프리셋 편집이 끝났는데 멈춘 채로 남은 이 애드온 채널을 되살림
+    (편집 중 이름 변경·크래시·저장 등으로 남은 경우). 되살린 수."""
+    if any(getattr(st, "preset_edit", False) for st in s.eyes):
+        return 0
+    rig = s.rig
+    ad = rig.animation_data if rig else None
+    if ad is None:
+        return 0
+    paths = _fskr_paths(s)
+    n = 0
+    for fc in AT._action_fcurves(ad):
+        if fc.mute and fc.data_path in paths:
+            fc.mute = False
+            n += 1
+    for st in s.eyes:
+        st["pe_muted"] = "[]"
+    return n
+
+
 def preset_edit_begin(context, s, st):
     """프리셋 편집 시작: 이 애드온 채널의 키를 잠시 멈춤(뮤트) → 프리셋 값을
     그대로 고칠 수 있음. 키·자동 키는 넣지 않음."""
@@ -1534,8 +1554,13 @@ def preset_edit_end(context, s, st):
         muted = {(a, int(b)) for a, b in json.loads(st.get("pe_muted", "[]"))}
     except Exception:
         muted = set()
+    # 멈췄던 채널 되살리기. 편집 중에 파츠 이름이 바뀌거나(리그 프로퍼티
+    # 이름도 바뀜) 파츠를 추가하면 기록한 경로와 달라지므로, 이 애드온의
+    # 채널은 경로와 상관없이 모두 되살린다 (이 애드온은 채널을 끄지 않음)
+    paths = _fskr_paths(s)
     for fc in AT._action_fcurves(ad):
-        if (fc.data_path, int(fc.array_index)) in muted:
+        if (fc.data_path, int(fc.array_index)) in muted or \
+                (fc.mute and fc.data_path in paths):
             fc.mute = False
     st["pe_muted"] = "[]"
     try:
@@ -1591,11 +1616,17 @@ class FSKR_OT_preset_edit(bpy.types.Operator):
         else:
             idx = st.preset_index
             saved = False
-            if self.action in ('SAVE', 'SAVE_KEY') and \
-                    0 <= idx < len(st.presets):
-                bpy.ops.fskr.face_preset_save('EXEC_DEFAULT', overwrite=True)
-                saved = True
-            preset_edit_end(context, s, st)
+            try:
+                if self.action in ('SAVE', 'SAVE_KEY') and \
+                        0 <= idx < len(st.presets):
+                    bpy.ops.fskr.face_preset_save('EXEC_DEFAULT',
+                                                  overwrite=True)
+                    saved = True
+            except Exception as e:
+                self.report({'ERROR'}, _tr("프리셋 저장 실패: ") + str(e))
+            finally:
+                # 저장이 실패해도 멈춘 키프레임은 반드시 되살림
+                preset_edit_end(context, s, st)
             if saved and self.action == 'SAVE_KEY':
                 bpy.ops.fskr.face_preset_apply('EXEC_DEFAULT', index=idx,
                                                key=True)

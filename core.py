@@ -12055,3 +12055,8 @@ _ZH.update({
         "关闭 Preferences → Animation → Keyframes 中的「Only Insert Available」。开启时，无法用 I 为从未打过关键帧的骨骼（如控制器手柄）打关键帧",
     "'Only Insert Available'을 껐습니다": "已关闭「Only Insert Available」",
 })
+
+# 1.0.233
+_EN.update({"프리셋 저장 실패: ": "Preset save failed: "})
+_JA.update({"프리셋 저장 실패: ": "プリセット保存に失敗: "})
+_ZH.update({"프리셋 저장 실패: ": "预设保存失败："})

@@ -375,7 +375,11 @@ def _absorb(scene, s, rig, st, n):
     if ad is None:
         return False
     pre = 'pose.bones["%s"].' % _base(st)
-    mine = [fc for fc in _action_fcurves(ad) if fc.data_path.startswith(pre)]
+    # 손잡이 위치 키만 (색 등 다른 값 키는 그대로 둠)
+    mine = [fc for fc in _action_fcurves(ad)
+            if fc.data_path.startswith(pre + "location")
+            or fc.data_path.startswith(pre + "rotation")
+            or fc.data_path.startswith(pre + "scale")]
     if not mine:
         return False
     from .atlas import _key

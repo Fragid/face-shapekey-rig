@@ -3734,6 +3734,13 @@ def _names_tick():
         parent_cell_migrate(bpy.context.scene.fskr)
     except Exception as e:
         print("FSKR parent cell migrate:", e)
+    try:
+        from .face_ui import unmute_leftover
+        n9 = unmute_leftover(bpy.context.scene.fskr)
+        if n9:
+            print("FSKR: 프리셋 편집 후 멈춘 채로 남은 채널 %d개를 되살림" % n9)
+    except Exception as e:
+        print("FSKR unmute:", e)
     return None
 
 

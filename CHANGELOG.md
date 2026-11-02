@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.233
+
+### Fixed
+- Expressions keyed on the timeline did not change during playback. Preset
+  editing mutes the add-on's channels while you edit, and ending the edit
+  could leave them muted, so the expression number and all part values
+  ignored their keys. Ending a preset edit now unmutes all add-on channels,
+  even when a save fails. Files with channels left muted are repaired
+  automatically when opened.
+- Only location / rotation / scale keys on the expression handle are turned
+  into expression keys; other keys on the handle are left alone.
+
 ## v1.0.232
 
 ### Fixed
