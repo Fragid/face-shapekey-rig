@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.234
+
+### Fixed
+- Viewport controller text (titles and list labels) showed up in renders.
+  Controller labels are now hidden from rendering; existing files are fixed
+  when opened.
+
 ## v1.0.233
 
 ### Fixed

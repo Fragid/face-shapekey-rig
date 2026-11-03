@@ -10,6 +10,19 @@ from math import radians, cos, sin
 from mathutils import Vector, Matrix
 
 
+def hide_labels_render():
+    """뷰포트 컨트롤러 글자(FPLBL…)는 렌더에서 숨김. 바꾼 수."""
+    n = 0
+    for ob in bpy.data.objects:
+        if ob.name.startswith("FPLBL") and not ob.hide_render:
+            try:
+                ob.hide_render = True
+                n += 1
+            except Exception:
+                pass
+    return n
+
+
 def kfi(owner, *args, **kw):
     """keyframe_insert, Blender 환경설정의 'Only Insert Available'·'Only
     Insert Needed'에 막히지 않게 잠시 끄고 넣는다 (애드온이 넣는 키는 항상

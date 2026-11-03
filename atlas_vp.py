@@ -486,6 +486,7 @@ def _label(context, rig, name, body, size, bone, pos_w, src=None):
     mat.diffuse_color = (0.9, 0.9, 0.9, 1.0)
     cu.materials.append(mat)
     ob = bpy.data.objects.new(name, cu)
+    ob.hide_render = True   # 컨트롤러 글자는 렌더에 안 나오게
     ob.color = (0.9, 0.9, 0.9, 1.0)
     context.scene.collection.objects.link(ob)
     ob.parent = rig

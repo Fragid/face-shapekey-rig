@@ -1095,6 +1095,7 @@ class FSKR_OT_add_text(bpy.types.Operator):
         mat.diffuse_color = (*self.color, 1.0)
         cu.materials.append(mat)
         ob = bpy.data.objects.new("FPLBL_txt", cu)
+        ob.hide_render = True   # 컨트롤러 글자는 렌더에 안 나오게
         ob.color = (*self.color, 1.0)
         context.scene.collection.objects.link(ob)
         ob.parent = rig
@@ -1381,6 +1382,7 @@ class FSKR_OT_import_layout(bpy.types.Operator, ImportHelper):
             mat.diffuse_color = (*col3, 1.0)
             cu.materials.append(mat)
             ob = bpy.data.objects.new("FPLBL_txt", cu)
+            ob.hide_render = True   # 컨트롤러 글자는 렌더에 안 나오게
             ob.color = (*col3, 1.0)
             context.scene.collection.objects.link(ob)
             ob.parent = rig
@@ -2973,6 +2975,7 @@ class FSKR_OT_char_import(bpy.types.Operator):
                 mat.diffuse_color = col4
                 cu.materials.append(mat)
                 ob = bpy.data.objects.new("FPLBL_txt", cu)
+                ob.hide_render = True   # 컨트롤러 글자는 렌더에 안 나오게
                 ob.color = col4
                 context.scene.collection.objects.link(ob)
                 ob.parent = rig

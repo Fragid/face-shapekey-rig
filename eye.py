@@ -3735,6 +3735,11 @@ def _names_tick():
     except Exception as e:
         print("FSKR parent cell migrate:", e)
     try:
+        from .core import hide_labels_render
+        hide_labels_render()     # 예전 파일: 컨트롤러 글자가 렌더되던 것
+    except Exception as e:
+        print("FSKR label render:", e)
+    try:
         from .face_ui import unmute_leftover
         n9 = unmute_leftover(bpy.context.scene.fskr)
         if n9:
@@ -4666,6 +4671,7 @@ def _pad_build(context, s, st):
         except Exception:
             pass
     lb = bpy.data.objects.new("FPLBL_eye_" + st.uid, cu)
+    lb.hide_render = True   # 컨트롤러 글자는 렌더에 안 나오게
     lb["fskr_lbl"] = json.dumps([[st.name + " · ", False], ["시선", True]],
                                 ensure_ascii=False)
     context.scene.collection.objects.link(lb)
