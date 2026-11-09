@@ -122,7 +122,7 @@ from .face_ui import face_classes, face_register, face_unregister
 from .preset_vp import pvp_classes, pvp_register, pvp_unregister
 from .layer_vp import lvp_classes, lvp_register, lvp_unregister
 from .ime import ime_classes, ime_register, ime_unregister
-from .puppet import puppet_classes
+from .puppet import puppet_classes, puppet_register, puppet_unregister
 from .panels import (
     FSKR_PT_setup,
     FSKR_PT_list,
@@ -270,6 +270,7 @@ def register():
     vp_register()
     over_register()
     face_register()
+    puppet_register()
     pvp_register()
     lvp_register()
     ime_register()
@@ -338,6 +339,7 @@ def unregister():
     lvp_unregister()
     pvp_unregister()
     face_unregister()
+    puppet_unregister()
     over_unregister()
     vp_unregister()
     atlas_unregister()

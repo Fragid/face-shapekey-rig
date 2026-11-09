@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.240
+
+### Added
+- Mesh Edit locks the view to an orthographic front view of the mesh plane
+  and turns on X-Ray so hidden points are visible. Rotating the view or
+  switching to perspective ends Edit Mode and restores X-Ray.
+- Chained pins (Shift+click) show an orange arrow from the parent pin to the
+  child pin.
+- Smooth Weights: blends weights between neighboring points (strength and
+  repeat adjustable), normalized per point.
+
 ## v1.0.239
 
 ### Fixed

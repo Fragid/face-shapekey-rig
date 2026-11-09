@@ -1153,6 +1153,20 @@ class FSKR_OT_mesh_mode(bpy.types.Operator):
             ob.select_set(True)
             vl.objects.active = ob
             bpy.ops.object.mode_set(mode='EDIT')
+            # 메시 평면을 정면·직교로 보고, 뷰가 돌아가면 편집 모드 해제
+            area = context.area if context.area is not None and \
+                context.area.type == 'VIEW_3D' else next(
+                    (a for a in context.screen.areas if a.type == 'VIEW_3D'),
+                    None)
+            if area is not None:
+                face_view(context, area, arm, ob)
+                reg = next((r for r in area.regions if r.type == 'WINDOW'),
+                           None)
+                try:
+                    with context.temp_override(area=area, region=reg):
+                        bpy.ops.fskr.mesh_edit_guard('INVOKE_DEFAULT')
+                except Exception as e:
+                    print("FSKR edit guard:", e)
         elif self.mode == 'WEIGHT':
             ob.hide_set(False)
             arm.hide_set(False)
@@ -1166,6 +1180,237 @@ class FSKR_OT_mesh_mode(bpy.types.Operator):
             vl.objects.active = arm
             bpy.ops.object.mode_set(mode='POSE')
         return {'FINISHED'}
+
+
+def _face_quat(arm):
+    """메시 평면을 정면에서 보는 뷰 회전 (위 = 평면 +Y, 앞 = 얼굴 바깥)."""
+    mw = arm.matrix_world.to_3x3()
+    y = (mw @ Vector((0.0, 1.0, 0.0))).normalized()
+    z = (mw @ Vector((0.0, 0.0, 1.0))).normalized() * \
+        float(arm.get("fskr_nsign", 1.0))
+    x = y.cross(z).normalized()
+    y = z.cross(x).normalized()
+    M = Matrix((x, y, z)).transposed()
+    return M.to_quaternion()
+
+
+def face_view(context, area, arm, ob):
+    """정면·직교로 맞추고 X-Ray를 켬 (편집 끝나면 되돌림)."""
+    sp = area.spaces.active
+    rv3d = sp.region_3d
+    rv3d.view_rotation = _face_quat(arm)
+    rv3d.view_perspective = 'ORTHO'
+    try:
+        me = ob.data
+        if len(me.vertices):
+            c = sum((v.co for v in me.vertices), Vector()) / len(me.vertices)
+            rv3d.view_location = arm.matrix_world @ c
+    except Exception:
+        pass
+    area.tag_redraw()
+
+
+class FSKR_OT_mesh_edit_guard(bpy.types.Operator):
+    """메시 파츠 편집 중: 뷰가 돌아가거나 원근이 되면 편집 모드를 끝냄.
+    편집 중에는 X-Ray (뒤에 가린 점도 보이게)."""
+    bl_idname = "fskr.mesh_edit_guard"
+    bl_label = "메시 편집 정면 고정"
+    bl_options = {'INTERNAL'}
+
+    def invoke(self, context, event):
+        self.area = context.area
+        if self.area is None or self.area.type != 'VIEW_3D':
+            return {'CANCELLED'}
+        sp = self.area.spaces.active
+        self.quat = sp.region_3d.view_rotation.copy()
+        self.xray = None
+        try:
+            sh = sp.shading
+            attr = "show_xray_wireframe" if sh.type == 'WIREFRAME' \
+                else "show_xray"
+            self.xray = (attr, getattr(sh, attr))
+            setattr(sh, attr, True)
+        except Exception:
+            pass
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _end(self, context, leave):
+        try:
+            if self.xray is not None:
+                setattr(self.area.spaces.active.shading, *self.xray)
+        except Exception:
+            pass
+        if leave and context.mode == 'EDIT_MESH':
+            try:
+                bpy.ops.object.mode_set(mode='OBJECT')
+            except Exception:
+                pass
+            self.report({'INFO'}, _tr("뷰가 돌아가 메시 편집을 끝냈습니다"))
+        try:
+            self.area.tag_redraw()
+        except Exception:
+            pass
+        return {'FINISHED', 'PASS_THROUGH'}
+
+    def modal(self, context, ev):
+        if context.mode != 'EDIT_MESH':
+            return self._end(context, False)
+        try:
+            rv3d = self.area.spaces.active.region_3d
+        except Exception:
+            return {'FINISHED', 'PASS_THROUGH'}
+        if rv3d.view_perspective != 'ORTHO' or \
+                rv3d.view_rotation.rotation_difference(self.quat).angle > 0.01:
+            return self._end(context, True)
+        return {'PASS_THROUGH'}
+
+
+class FSKR_OT_mesh_weight_smooth(bpy.types.Operator):
+    bl_idname = "fskr.mesh_weight_smooth"
+    bl_label = "웨이트 부드럽게"
+    bl_description = ("이웃한 점끼리 웨이트를 섞어 경계를 부드럽게 합니다 "
+                      "(모든 뼈, 합은 1로 맞춤)")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    uid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    lid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    factor: bpy.props.FloatProperty(name="세기", default=0.5, min=0.0,
+                                    max=1.0)
+    repeat: bpy.props.IntProperty(name="반복", default=3, min=1, max=50)
+
+    def execute(self, context):
+        s, st, L = _ctx(self, context)
+        ob = part_ob(L) if L else None
+        if ob is None:
+            return {'CANCELLED'}
+        mode = context.mode
+        if mode == 'EDIT_MESH':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        n = smooth_weights(ob, self.factor, self.repeat)
+        if mode == 'EDIT_MESH':
+            bpy.ops.object.mode_set(mode='EDIT')
+        ob.update_tag()
+        self.report({'INFO'}, _tr("웨이트 부드럽게: ") + "%d" % n)
+        return {'FINISHED'}
+
+
+def smooth_weights(ob, factor=0.5, repeat=3):
+    """라플라시안: w ← (1-f)·w + f·(이웃 평균). 끝나면 점마다 합 = 1."""
+    import numpy as np
+    me = ob.data
+    groups = list(ob.vertex_groups)
+    if not groups or not len(me.vertices):
+        return 0
+    nv, ng = len(me.vertices), len(groups)
+    W = np.zeros((nv, ng))
+    gi = {g.index: j for j, g in enumerate(groups)}
+    for v in me.vertices:
+        for e in v.groups:
+            j = gi.get(e.group)
+            if j is not None:
+                W[v.index, j] = e.weight
+    ed = np.array([e.vertices[:] for e in me.edges], dtype=np.int64)
+    if not len(ed):
+        return 0
+    deg = np.zeros(nv)
+    np.add.at(deg, ed[:, 0], 1)
+    np.add.at(deg, ed[:, 1], 1)
+    deg = np.maximum(deg, 1)
+    for _ in range(max(1, int(repeat))):
+        S = np.zeros_like(W)
+        np.add.at(S, ed[:, 0], W[ed[:, 1]])
+        np.add.at(S, ed[:, 1], W[ed[:, 0]])
+        W = (1.0 - factor) * W + factor * (S / deg[:, None])
+    tot = W.sum(1, keepdims=True)
+    W = np.where(tot > 1e-9, W / np.maximum(tot, 1e-9), W)
+    for j, g in enumerate(groups):
+        idx = np.nonzero(W[:, j] > 1e-4)[0]
+        zero = np.nonzero(W[:, j] <= 1e-4)[0]
+        if len(zero):
+            g.remove(zero.tolist())
+        for i in idx:
+            g.add([int(i)], float(W[i, j]), 'REPLACE')
+    return ng
+
+
+# ------------------------------------------------------------------
+# 사슬 표시: 이어 찍은 핀끼리 화살표 (부모 핀 → 자식 핀)
+# ------------------------------------------------------------------
+
+_CHAIN = {"h": None}
+
+
+def _chain_draw():
+    import gpu
+    import math as m
+    from gpu_extras.batch import batch_for_shader
+    ctx = bpy.context
+    reg, rv3d = ctx.region, ctx.region_data
+    if reg is None or rv3d is None:
+        return
+    segs = []
+    try:
+        objs = [o for o in ctx.visible_objects
+                if o.type == 'ARMATURE' and o.name.startswith(ARM_PREFIX)]
+    except Exception:
+        return
+    for arm in objs:
+        mw = arm.matrix_world
+        for pb in arm.pose.bones:
+            par = pb.parent
+            if par is None or not pb.bone.get("fskr_pin") or \
+                    not par.bone.get("fskr_pin"):
+                continue
+            a = view3d_utils.location_3d_to_region_2d(reg, rv3d,
+                                                      mw @ par.head)
+            b = view3d_utils.location_3d_to_region_2d(reg, rv3d,
+                                                      mw @ pb.head)
+            if a is None or b is None:
+                continue
+            d = b - a
+            ln = d.length
+            if ln < 16:
+                continue
+            u = d / ln
+            # 고리 바깥에서 시작·끝 (고리와 겹치지 않게)
+            a2 = a + u * 8
+            b2 = b - u * 10
+            nrm = Vector((-u.y, u.x))
+            h = 9.0
+            segs.append((a2, b2, b2 - u * h + nrm * h * 0.55,
+                         b2 - u * h - nrm * h * 0.55))
+    if not segs:
+        return
+    sh = gpu.shader.from_builtin('UNIFORM_COLOR')
+    gpu.state.blend_set('ALPHA')
+    gpu.state.line_width_set(2.0)
+    lines, tris = [], []
+    for a2, b2, l9, r9 in segs:
+        lines += [tuple(a2), tuple(b2)]
+        tris += [tuple(b2), tuple(l9), tuple(r9)]
+    sh.bind()
+    sh.uniform_float("color", (1.0, 0.75, 0.15, 0.95))
+    batch_for_shader(sh, 'LINES', {"pos": lines}).draw(sh)
+    batch_for_shader(sh, 'TRIS', {"pos": tris}).draw(sh)
+    gpu.state.line_width_set(1.0)
+    gpu.state.blend_set('NONE')
+
+
+def puppet_register():
+    if _CHAIN["h"] is None:
+        _CHAIN["h"] = bpy.types.SpaceView3D.draw_handler_add(
+            _chain_draw, (), 'WINDOW', 'POST_PIXEL')
+
+
+def puppet_unregister():
+    if _CHAIN["h"] is not None:
+        try:
+            bpy.types.SpaceView3D.draw_handler_remove(_CHAIN["h"], 'WINDOW')
+        except Exception:
+            pass
+        _CHAIN["h"] = None
+    _pin_cleanup()
 
 
 def _plane_hit(context, arm, mp):
@@ -1555,6 +1800,10 @@ def draw_mesh_box(layout, s, st, L):
                     text=_tr("웨이트 자동 계산"))
     op.uid, op.lid = st.uid, L.lid
     r = b.row(align=True)
+    op = r.operator("fskr.mesh_weight_smooth", icon='MOD_SMOOTH',
+                    text=_tr("웨이트 부드럽게"))
+    op.uid, op.lid = st.uid, L.lid
+    r = b.row(align=True)
     op = r.operator("fskr.mesh_mode", icon='OBJECT_DATAMODE',
                     text=_tr("끝내기"))
     op.uid, op.lid, op.mode = st.uid, L.lid, 'OBJECT'
@@ -1564,4 +1813,5 @@ def draw_mesh_box(layout, s, st, L):
 
 puppet_classes = (FSKR_OT_mesh_make, FSKR_OT_mesh_remove,
                   FSKR_OT_mesh_weights, FSKR_OT_mesh_mode, FSKR_OT_mesh_pin,
-                  FSKR_OT_mesh_ik)
+                  FSKR_OT_mesh_ik, FSKR_OT_mesh_edit_guard,
+                  FSKR_OT_mesh_weight_smooth)
