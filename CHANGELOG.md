@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.244
+
+### Fixed
+- Moving a mesh part past the edge of the face canvas pulled the outside
+  points into a single spot, stretching the drawing like a black hole. Points
+  that fall outside the canvas UV are now removed, so the drawing is simply
+  cut at the canvas edge. Existing files are upgraded in place when the
+  canvas rebuilds.
+
 ## v1.0.243
 
 ### Fixed

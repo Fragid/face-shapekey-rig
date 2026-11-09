@@ -365,11 +365,49 @@ def _gn_stick():
     return ng
 
 
+def gn_upgrade(ng):
+    """캔버스 UV 밖으로 나간 점(얼굴 표면을 못 찾는 점)은 지움.
+    지우지 않으면 원점으로 빨려 들어가 블랙홀처럼 늘어남.
+    입력 소켓은 그대로 두고 노드만 더하므로 기존 모디파이어 값 유지."""
+    if ng is None or ng.get("fskr_cut") == 1:
+        return ng
+    N, Lk = ng.nodes, ng.links
+    su = next((n for n in N if n.bl_idname == 'GeometryNodeSampleUVSurface'),
+              None)
+    go = next((n for n in N if n.bl_idname == 'NodeGroupOutput'), None)
+    sp2 = None
+    for n in N:   # 얼굴 표면 위치를 넣는 마지막 Set Position
+        if n.bl_idname == 'GeometryNodeSetPosition' and \
+                n.inputs["Position"].is_linked and \
+                n.inputs["Position"].links[0].from_node.bl_idname == \
+                'ShaderNodeVectorMath' and \
+                n.inputs["Position"].links[0].from_node.operation == 'ADD':
+            sp2 = n
+    if su is None or go is None or sp2 is None:
+        return ng
+    nt = N.new('FunctionNodeBooleanMath')
+    nt.operation = 'NOT'
+    nt.location = (sp2.location.x, sp2.location.y - 200)
+    Lk.new(su.outputs["Is Valid"], nt.inputs[0])
+    dl = N.new('GeometryNodeDeleteGeometry')
+    dl.domain = 'POINT'
+    dl.location = (sp2.location.x + 100, sp2.location.y - 100)
+    outs = [lk.to_socket for lk in sp2.outputs[0].links]
+    for lk in list(sp2.outputs[0].links):
+        Lk.remove(lk)
+    Lk.new(sp2.outputs[0], dl.inputs["Geometry"])
+    Lk.new(nt.outputs[0], dl.inputs["Selection"])
+    for so in outs:
+        Lk.new(dl.outputs[0], so)
+    ng["fskr_cut"] = 1
+    return ng
+
+
 def _gn_stick2():
     """평면 좌표 → 캔버스 UV → 얼굴 표면 (+ 보이기). 대칭은 오브젝트로."""
     ng = bpy.data.node_groups.get(GN_STICK2)
     if ng is not None and ng.get("fskr_v") == 1:
-        return ng
+        return gn_upgrade(ng)
     if ng is None:
         ng = bpy.data.node_groups.new(GN_STICK2, 'GeometryNodeTree')
     ng.nodes.clear()
@@ -443,7 +481,7 @@ def _gn_stick2():
     Lk.new(sp2.outputs[0], sw.inputs["True"])
     Lk.new(sw.outputs[0], go.inputs[0])
     ng["fskr_v"] = 1
-    return ng
+    return gn_upgrade(ng)
 
 
 def _gn_mirror():
@@ -1315,6 +1353,11 @@ def update_offsets(s, st, context=None):
     k = float(arm.get("fskr_k", 1.0)) or 1.0
     sg = float(arm.get("fskr_nsign", 1.0))
     gap = _canvas_gap(st)
+    for gname in (GN_STICK, GN_STICK2):   # 예전 파일: 캔버스 밖 자르기 추가
+        try:
+            gn_upgrade(bpy.data.node_groups.get(gname))
+        except Exception as e:
+            print("FSKR stick upgrade:", e)
     # 예전(1.0.237) 뼈에도 표시를 달고 전용 모양 적용
     try:
         for L in st.layers:
