@@ -338,8 +338,13 @@ def _mod_set(mod, ident, value):
     it = _mod_input(mod, ident)
     if it is not None:
         it.value = value
-        return
-    mod[ident] = value          # 예전 버전 (idprop)
+    else:
+        mod[ident] = value          # 예전 버전 (idprop)
+    # 값만 바꾸면 뷰포트가 다시 계산하지 않을 때가 있어 직접 알림
+    try:
+        mod.id_data.update_tag()
+    except Exception:
+        pass
 
 
 def _mod_path(mod, ident):
@@ -587,6 +592,76 @@ def _edit_bones(context, arm, fn):
     return out
 
 
+WGT_PREFIX = "FSKR_WGT_"
+
+
+def _widget(kind):
+    """뼈 모양 (선만 있는 메시). Pin = 원, Root = 십자 사각형, IK = 마름모.
+    뼈 공간: Y = 뼈 방향, X = 옆, 원점 = 뼈 머리 (핀 자리)."""
+    import math as m
+    name = WGT_PREFIX + kind
+    ob = bpy.data.objects.get(name)
+    if ob is not None and ob.type == 'MESH':
+        return ob
+    vs, es = [], []
+
+    def loop(pts):
+        b = len(vs)
+        vs.extend(pts)
+        es.extend((b + i, b + (i + 1) % len(pts)) for i in range(len(pts)))
+    if kind == "Pin":
+        n = 24
+        loop([(0.6 * m.cos(2 * m.pi * i / n), 0.6 * m.sin(2 * m.pi * i / n),
+               0.0) for i in range(n)])
+        loop([(0.25 * m.cos(2 * m.pi * i / 12),
+               0.25 * m.sin(2 * m.pi * i / 12), 0.0) for i in range(12)])
+    elif kind == "Root":
+        loop([(-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0),
+              (-0.5, 0.5, 0.0)])
+        b = len(vs)
+        vs.extend([(-0.75, 0.0, 0.0), (0.75, 0.0, 0.0), (0.0, -0.75, 0.0),
+                   (0.0, 1.0, 0.0)])
+        es.extend([(b, b + 1), (b + 2, b + 3)])
+    else:   # IK
+        loop([(0.0, 0.7, 0.0), (0.7, 0.0, 0.0), (0.0, -0.7, 0.0),
+              (-0.7, 0.0, 0.0)])
+        loop([(0.0, 0.35, 0.0), (0.35, 0.0, 0.0), (0.0, -0.35, 0.0),
+              (-0.35, 0.0, 0.0)])
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(vs, es, [])
+    ob = bpy.data.objects.new(name, me)
+    ob.use_fake_user = True
+    return ob
+
+
+def apply_shapes(arm):
+    """이 애드온이 만든 뼈에 전용 모양·색 (캐릭터 리그 뼈와 구분)."""
+    look = (("fskr_pin", "Pin", 'THEME09', 1.0),
+            ("fskr_root", "Root", 'THEME04', 1.0),
+            ("fskr_ik", "IK", 'THEME01', 1.0))
+    for pb in arm.pose.bones:
+        b = pb.bone
+        for flag, kind, pal, sc in look:
+            if not b.get(flag):
+                continue
+            try:
+                pb.custom_shape = _widget(kind)
+                # 사슬이면 뼈 길이가 핀 사이 거리라, 길이와 상관없는 고정 크기
+                sz = float(b.get("fskr_size", 0.0)) or b.length
+                pb.use_custom_shape_bone_size = False
+                pb.custom_shape_scale_xyz = (sz * sc, sz * sc, sz * sc)
+                try:
+                    pb.custom_shape_wire_width = 2.5
+                except Exception:
+                    pass
+                b.show_wire = True
+                pb.color.palette = pal
+                b.color.palette = pal
+            except Exception as e:
+                print("FSKR bone shape:", e)
+            break
+
+
 def _uniq_bone(arm, name):
     if name not in arm.data.bones:
         return name
@@ -666,9 +741,11 @@ def make_mesh_part(context, s, st, L, res=14):
             b.head = (cx, cy, 0.0)
             b.tail = (cx, cy + max(hy * 0.6, 0.02), 0.0)
             b.use_deform = True
+            b["fskr_root"] = True
             return b.name
         root = _edit_bones(context, arm, mk)
         L["pp_root"] = root
+        apply_shapes(arm)
     # 4) 모디파이어: 제자리 저장 → 뼈 → 얼굴에 붙이기
     for m in list(ob.modifiers):
         ob.modifiers.remove(m)
@@ -814,6 +891,21 @@ def update_offsets(s, st, context=None):
     k = float(arm.get("fskr_k", 1.0)) or 1.0
     sg = float(arm.get("fskr_nsign", 1.0))
     gap = _canvas_gap(st)
+    # 예전(1.0.237) 뼈에도 표시를 달고 전용 모양 적용
+    try:
+        for L in st.layers:
+            r9 = L.get("pp_root", "")
+            if r9 and r9 in arm.data.bones:
+                arm.data.bones[r9]["fskr_root"] = True
+        for b in arm.data.bones:
+            if b.name.endswith(".IK") and not b.use_deform:
+                b["fskr_ik"] = True
+        if any(pb.custom_shape is None and (pb.bone.get("fskr_pin")
+               or pb.bone.get("fskr_root") or pb.bone.get("fskr_ik"))
+               for pb in arm.pose.bones):
+            apply_shapes(arm)
+    except Exception as e:
+        print("FSKR bone shapes:", e)
     for L in list(st.layers):
         ob = part_ob(L) if mesh_on(L) else None
         if ob is None:
@@ -841,6 +933,14 @@ def update_offsets(s, st, context=None):
             off = OFFSET_BASE + OFFSET_STEP * rank
         L["mesh_back"] = back
         _mod_set(m, _sock_id(m.node_group, "Offset"), off / k * sg)
+        ob.update_tag()
+    try:
+        for win in bpy.context.window_manager.windows:
+            for ar in win.screen.areas:
+                if ar.type == 'VIEW_3D':
+                    ar.tag_redraw()
+    except Exception:
+        pass
 
 
 def _depth_cb(self, context):
@@ -1117,8 +1217,10 @@ def add_pin(context, arm, ob, L, x, y, parent=None):
         b.use_connect = False
         b.use_deform = True
         b["fskr_pin"] = True
+        b["fskr_size"] = ln
         return b.name
     nm = _edit_bones(context, arm, mk)
+    apply_shapes(arm)
     recompute_weights(arm, ob, L)
     return nm
 
@@ -1386,19 +1488,16 @@ class FSKR_OT_mesh_ik(bpy.types.Operator):
             t.tail = e.head + Vector((0.0, _pin_len(arm, L) * 1.5, 0.0))
             t.parent = eb.get(root)
             t.use_deform = False
+            t["fskr_ik"] = True
+            t["fskr_size"] = _pin_len(arm, L) * 1.5
             return t.name
         tname = _edit_bones(context, arm, mk)
+        apply_shapes(arm)
         pb = arm.pose.bones[owner]
         c = pb.constraints.new('IK')
         c.target = arm
         c.subtarget = tname
         c.chain_count = len(chain)
-        try:
-            tb = arm.pose.bones[tname]
-            tb.color.palette = 'THEME01'
-            arm.data.bones[tname].color.palette = 'THEME01'
-        except Exception:
-            pass
         vl = context.view_layer
         vl.objects.active = arm
         try:

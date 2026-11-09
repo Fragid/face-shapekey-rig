@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.239
+
+### Fixed
+- Right after "Convert to Mesh" the part stayed behind the canvas in the
+  viewport until something else forced a refresh. Changing a mesh part's
+  depth now tags it for update immediately.
+
+### Changed
+- Puppet bones use their own shapes so they don't look like the character
+  rig: pins are yellow rings, part roots are blue squares with a cross, IK
+  controllers are red diamonds. Shapes keep a fixed size along pin chains.
+
 ## v1.0.238
 
 ### Fixed
