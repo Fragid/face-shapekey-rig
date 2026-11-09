@@ -1360,7 +1360,8 @@ def recompute_weights(arm, ob, L):
                          0.0, 1.0)
         px, py = hx + tt * ax, hy + tt * ay
         D[:, j] = (co[:, 0] - px) ** 2 + (co[:, 1] - py) ** 2
-    W = 1.0 / (D + 1e-5) ** 1.5
+    # 1/거리² (너무 날카로우면 뼈 사이가 찢어진 듯 꺾임)
+    W = 1.0 / (D + 1e-5)
     if W.shape[1] > 4:
         thr = -np.sort(-W, axis=1)[:, 3:4]
         W[W < thr] = 0.0
@@ -1370,6 +1371,8 @@ def recompute_weights(arm, ob, L):
         for i in range(len(co)):
             if W[i, j] > 1e-4:
                 g.add([i], float(W[i, j]), 'REPLACE')
+    if len(names) > 1:
+        smooth_weights(ob, 0.5, 4)   # 뼈 사이를 부드럽게 이어 줌
 
 
 def remove_mesh_part(context, s, st, L):

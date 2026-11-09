@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.242
+
+### Fixed
+- Auto weights fell off too sharply (1/d³), so large pin moves tore the
+  drawing between pins. Weights now use 1/d² and are smoothed between bones
+  after each recalculation. Press "Auto Weights" once on parts made earlier.
+
 ## v1.0.241
 
 ### Added
