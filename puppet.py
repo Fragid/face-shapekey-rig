@@ -990,6 +990,7 @@ def _setup_mods(ob, s, st, L, arm, cob, mirror=False):
 
 
 def arm_r_name(st):
+    """1.0.241에서 쓰던 복사본 전용 아마추어 (지금은 옮겨 담고 지움)."""
     return ARM_PREFIX + st.uid + "_R"
 
 
@@ -997,32 +998,26 @@ def puppet_arm_r(st):
     return bpy.data.objects.get(arm_r_name(st))
 
 
-def ensure_arm_r(context, st):
-    """대칭 복사 쪽 아마추어: 원본 아마추어와 같은 자리·부모. 뼈 이름도
-    원본과 같게 해서 메시(정점 그룹)를 그대로 같이 씀."""
-    arm = puppet_arm(st)
-    if arm is None:
-        return None
+def _drop_old_arm_r(context, st, L):
+    """1.0.241 방식(별도 아마추어)의 이 파츠 뼈를 지우고, 비면 아마추어도."""
     ar = puppet_arm_r(st)
-    if ar is not None:
-        return ar
-    ad = bpy.data.armatures.new(arm_r_name(st))
-    ad.display_type = arm.data.display_type
-    ar = bpy.data.objects.new(arm_r_name(st), ad)
-    for c in arm.users_collection:
-        c.objects.link(ar)
-    ar.show_in_front = True
-    for k9 in ("fskr_k", "fskr_B", "fskr_nsign", "fskr_uid"):
-        if k9 in arm:
-            ar[k9] = arm[k9]
-    ar["fskr_mirror"] = 1
-    ar.parent = arm.parent
-    ar.parent_type = arm.parent_type
-    if arm.parent_type == 'VERTEX_3':
-        ar.parent_vertices = arm.parent_vertices
-    ar.matrix_parent_inverse = arm.matrix_parent_inverse.copy()
-    ar.matrix_basis = arm.matrix_basis.copy()
-    return ar
+    if ar is None:
+        return
+    root = L.get("pp_root", "")
+    if root and root in ar.data.bones:
+        def rm(eb):
+            b = eb.get(root)
+            if b is None:
+                return
+            for c in list(b.children_recursive):
+                eb.remove(c)
+            eb.remove(b)
+        _edit_bones(context, ar, rm)
+    if not len(ar.data.bones):
+        ad = ar.data
+        bpy.data.objects.remove(ar)
+        if ad.users == 0:
+            bpy.data.armatures.remove(ad)
 
 
 def _part_tree(arm, root):
@@ -1040,10 +1035,11 @@ def _part_tree(arm, root):
     return out
 
 
-def _mirror_cons(ar, name, arm, rig, prop):
-    """복사본 뼈가 원본 뼈(같은 이름)를 거울로 따라감.
+def _mirror_cons(arm, name, rig, prop):
+    """복사본 뼈(name.R)가 원본 뼈(name)를 거울로 따라감.
     세기 = 대칭 조종 (리그 프로퍼티, 키 가능)."""
-    pb = ar.pose.bones.get(name)
+    rn = mirror_name(name)
+    pb = arm.pose.bones.get(rn)
     if pb is None:
         return
     if any(c.name == "FSKR mirror loc" for c in pb.constraints):
@@ -1063,26 +1059,44 @@ def _mirror_cons(ar, name, arm, rig, prop):
         c.owner_space = 'LOCAL'
         c.target_space = 'LOCAL'
         try:
-            _drv_simple(ar, 'pose.bones["%s"].constraints["%s"].influence'
-                        % (name, c.name), "min(max(m,0),1)",
+            _drv_simple(arm, 'pose.bones["%s"].constraints["%s"].influence'
+                        % (rn, c.name), "min(max(m,0),1)",
                         [("m", rig, '["%s"]' % prop)])
         except Exception as e:
             print("FSKR mirror influence:", e)
 
 
+def sync_mirror_mesh(L):
+    """복사본 메시 = 원본 메시 복사 + 정점 그룹 이름만 .R 뼈로.
+    (Blender는 정점 그룹 이름을 메시에 저장해서 같이 쓸 수 없음)"""
+    ob, obr = part_ob(L), part_ob_r(L)
+    if ob is None or obr is None:
+        return
+    old = obr.data
+    me = ob.data.copy()
+    me.name = ob.data.name + ".R"
+    obr.data = me
+    for g in obr.vertex_groups:
+        g.name = mirror_name(g.name)
+    if old is not None and old != ob.data and old.users == 0:
+        bpy.data.meshes.remove(old)
+    obr.update_tag()
+
+
 def sync_mirror(context, s, st, L):
-    """원본 쪽 뼈(이 파츠)를 복사본 아마추어에 거울로 맞춤:
-    없는 뼈 만들기, 위치 갱신, 원본에서 지운 뼈 지우기, 거울 제약·IK."""
+    """원본 쪽 뼈(이 파츠)를 같은 아마추어에 .R 로 거울 복사:
+    없는 뼈 만들기, 위치 갱신, 원본에서 지운 뼈 지우기, 거울 제약·IK.
+    복사본 메시도 원본에 맞춤."""
     if part_ob_r(L) is None:
         return
     arm = puppet_arm(st)
-    ar = ensure_arm_r(context, st)
-    if arm is None or ar is None:
+    if arm is None:
         return
     rig = s.rig
     root = L.get("pp_root", "")
     names = _part_tree(arm, root)
-    old = set(_part_tree(ar, root))
+    old = set(_part_tree(arm, mirror_name(root)))
+    want = {mirror_name(n) for n in names}
     info = []
     for nm in names:
         b = arm.data.bones[nm]
@@ -1095,62 +1109,112 @@ def sync_mirror(context, s, st, L):
                                            "fskr_size") if k9 in b}))
 
     def mk(eb):
-        for nm in old - set(names):
-            x = eb.get(nm)
+        for rn in old - want:
+            x = eb.get(rn)
             if x is not None:
                 eb.remove(x)
         for nm, par, h, t, dfm, props in info:
-            r = eb.get(nm) or eb.new(nm)
+            rn = mirror_name(nm)
+            r = eb.get(rn) or eb.new(rn)
             r.head = (h[0], h[1], 0.0)
             r.tail = (t[0], t[1], 0.0)
             r.roll = 0.0
-            r.parent = eb.get(par) if par else None
+            r.parent = eb.get(mirror_name(par)) if par else None
             r.use_connect = False
             r.use_deform = dfm
             for k9, v9 in props.items():
                 r[k9] = v9
-    _edit_bones(context, ar, mk)
-    apply_shapes(ar)
+            r["fskr_mirror_of"] = nm
+    _edit_bones(context, arm, mk)
+    apply_shapes(arm)
     prop = _p_mpose(st, L)
     EY._ensure_float(rig, prop, 1.0, 0.0, 1.0)
     for nm in names:
-        _mirror_cons(ar, nm, arm, rig, prop)
-        src, dst = arm.pose.bones.get(nm), ar.pose.bones.get(nm)
+        _mirror_cons(arm, nm, rig, prop)
+        src = arm.pose.bones.get(nm)
+        dst = arm.pose.bones.get(mirror_name(nm))
         if src is None or dst is None:
             continue
-        iks = [c for c in src.constraints if c.type == 'IK']
         for c in list(dst.constraints):
             if c.type == 'IK':
                 dst.constraints.remove(c)
-        for c in iks:
-            c2 = dst.constraints.new('IK')
-            c2.target = ar
-            c2.subtarget = c.subtarget
-            c2.chain_count = c.chain_count
+        for c in src.constraints:
+            if c.type == 'IK':
+                c2 = dst.constraints.new('IK')
+                c2.target = arm
+                c2.subtarget = mirror_name(c.subtarget)
+                c2.chain_count = c.chain_count
+    sync_mirror_mesh(L)
 
 
 def ensure_mirror(context, s, st, L):
-    """대칭 복사 쪽 메시 오브젝트(메시는 원본과 같이 씀)와 뼈."""
+    """대칭 복사 쪽 메시 오브젝트와 뼈 (같은 아마추어, 이름 .R)."""
     arm, ob = puppet_arm(st), part_ob(L)
     if arm is None or ob is None:
         return None
-    ar = ensure_arm_r(context, st)
+    _drop_old_arm_r(context, st, L)
     obr = part_ob_r(L)
     if obr is None:
-        obr = bpy.data.objects.new(ob.name + ".R", ob.data)
+        obr = bpy.data.objects.new(ob.name + ".R", ob.data.copy())
         for c in ob.users_collection:
             c.objects.link(obr)
-    else:
-        obr.data = ob.data
-    obr.parent = ar
+    obr.parent = arm
     obr.parent_type = 'OBJECT'
     obr.matrix_parent_inverse = Matrix.Identity(4)
     obr.matrix_basis = Matrix.Identity(4)
     obr["fskr_uid"], obr["fskr_lid"], obr["fskr_mirror"] = st.uid, L.lid, 1
     L["mesh_ob_r"] = obr.name
-    _setup_mods(obr, s, st, L, ar, _canvas(st), mirror=True)
+    _setup_mods(obr, s, st, L, arm, _canvas(st), mirror=True)
     sync_mirror(context, s, st, L)
     return obr
+
+
+# 원본 메시를 편집 모드·웨이트 페인트로 고치면 잠시 뒤 복사본에 반영
+_MSYNC = {"pending": set(), "timer": False}
+
+
+def _msync_tick():
+    _MSYNC["timer"] = False
+    pend, _MSYNC["pending"] = _MSYNC["pending"], set()
+    try:
+        ctx = bpy.context
+        if ctx.mode == 'EDIT_MESH':      # 편집 중엔 끝날 때까지 기다림
+            _MSYNC["pending"] |= pend
+            _MSYNC["timer"] = True
+            return 0.5
+        s = ctx.scene.fskr
+        for st in s.eyes:
+            for L in st.layers:
+                ob = part_ob(L)
+                if ob is not None and ob.data.name in pend and \
+                        part_ob_r(L) is not None:
+                    sync_mirror_mesh(L)
+    except Exception as e:
+        print("FSKR mirror mesh sync:", e)
+    return None
+
+
+@bpy.app.handlers.persistent
+def _msync_depsgraph(scene, depsgraph):
+    try:
+        for u in depsgraph.updates:
+            idb = u.id
+            if not isinstance(idb, bpy.types.Mesh) or not u.is_updated_geometry:
+                continue
+            _MSYNC["pending"].add(idb.name)   # 아래에서 원본 파츠만 남김
+        if _MSYNC["pending"] and not _MSYNC["timer"]:
+            known = set()
+            for st in scene.fskr.eyes:
+                for L in st.layers:
+                    ob = part_ob(L)
+                    if ob is not None and part_ob_r(L) is not None:
+                        known.add(ob.data.name)
+            _MSYNC["pending"] &= known
+            if _MSYNC["pending"]:
+                _MSYNC["timer"] = True
+                bpy.app.timers.register(_msync_tick, first_interval=0.4)
+    except Exception:
+        pass
 
 
 def _canvas_gap(st):
@@ -1373,6 +1437,8 @@ def recompute_weights(arm, ob, L):
                 g.add([i], float(W[i, j]), 'REPLACE')
     if len(names) > 1:
         smooth_weights(ob, 0.5, 4)   # 뼈 사이를 부드럽게 이어 줌
+    if part_ob_r(L) is not None:
+        sync_mirror_mesh(L)
 
 
 def remove_mesh_part(context, s, st, L):
@@ -1380,7 +1446,10 @@ def remove_mesh_part(context, s, st, L):
     arm = puppet_arm(st)
     obr = part_ob_r(L)
     if obr is not None:
+        mr = obr.data
         bpy.data.objects.remove(obr)
+        if mr is not None and mr.users == 0:
+            bpy.data.meshes.remove(mr)
     L["mesh_ob_r"] = ""
     if ob is not None:
         me = ob.data
@@ -1391,19 +1460,20 @@ def remove_mesh_part(context, s, st, L):
     if mat is not None and mat.users == 0:
         bpy.data.materials.remove(mat)
     root = L.get("pp_root", "")
-    for a9 in (arm, puppet_arm_r(st)):
-        if a9 is None or not root or root not in a9.data.bones:
-            continue
-
+    _drop_old_arm_r(context, st, L)
+    roots = [r9 for r9 in (root, mirror_name(root))
+             if root and arm is not None and r9 in arm.data.bones]
+    if roots:
         def rm(eb):
-            b = eb.get(root)
-            if b is None:
-                return
-            for c in list(b.children_recursive):
-                eb.remove(c)
-            # IK 대상 뼈 (뿌리에 붙어 있음)도 위에서 같이 지워짐
-            eb.remove(b)
-        _edit_bones(context, a9, rm)
+            for r9 in roots:
+                b = eb.get(r9)
+                if b is None:
+                    continue
+                for c in list(b.children_recursive):
+                    eb.remove(c)
+                # IK 대상 뼈 (뿌리에 붙어 있음)도 위에서 같이 지워짐
+                eb.remove(b)
+        _edit_bones(context, arm, rm)
     L["pp_root"] = ""
     L["pp_root_r"] = ""
     L.mesh_ob = ""
@@ -1551,11 +1621,8 @@ class FSKR_OT_mesh_mode(bpy.types.Operator):
             vl.objects.active = ob
             bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
         elif self.mode == 'POSE':
-            ar = puppet_arm_r(st)
-            for a9 in (arm, ar):
-                if a9 is not None:
-                    a9.hide_set(False)
-                    a9.select_set(True)
+            arm.hide_set(False)
+            arm.select_set(True)
             vl.objects.active = arm
             bpy.ops.object.mode_set(mode='POSE')
         return {'FINISHED'}
@@ -1667,6 +1734,8 @@ class FSKR_OT_mesh_weight_smooth(bpy.types.Operator):
         if mode == 'EDIT_MESH':
             bpy.ops.object.mode_set(mode='OBJECT')
         n = smooth_weights(ob, self.factor, self.repeat)
+        if part_ob_r(L) is not None:
+            sync_mirror_mesh(L)
         if mode == 'EDIT_MESH':
             bpy.ops.object.mode_set(mode='EDIT')
         ob.update_tag()
@@ -1777,12 +1846,17 @@ def _chain_draw():
 
 
 def puppet_register():
+    if _msync_depsgraph not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_msync_depsgraph)
     if _CHAIN["h"] is None:
         _CHAIN["h"] = bpy.types.SpaceView3D.draw_handler_add(
             _chain_draw, (), 'WINDOW', 'POST_PIXEL')
 
 
 def puppet_unregister():
+    for h in list(bpy.app.handlers.depsgraph_update_post):
+        if getattr(h, "__name__", "") == "_msync_depsgraph":
+            bpy.app.handlers.depsgraph_update_post.remove(h)
     if _CHAIN["h"] is not None:
         try:
             bpy.types.SpaceView3D.draw_handler_remove(_CHAIN["h"], 'WINDOW')
@@ -2105,10 +2179,8 @@ class FSKR_OT_mesh_ik(bpy.types.Operator):
             return {'CANCELLED'}
         b = arm.data.bones.active
         pins = set(pin_bones(arm, L))
-        ar = puppet_arm_r(st)
-        if ar is not None and context.active_object == ar and \
-                ar.data.bones.active is not None:
-            b = arm.data.bones.get(ar.data.bones.active.name)  # 복사본 → 원본
+        if b is not None and b.get("fskr_mirror_of"):
+            b = arm.data.bones.get(b["fskr_mirror_of"])   # 복사본 → 원본
         if b is None or b.name not in pins:
             self.report({'WARNING'}, _tr("포즈 모드에서 이 파츠의 핀을 "
                                          "하나 고르세요"))
@@ -2179,7 +2251,7 @@ class FSKR_OT_mesh_mirror_pose(bpy.types.Operator):
         EY._ensure_float(rig, p, 1.0, 0.0, 1.0)
         on = float(rig.get(p, 1.0)) >= 0.5
         if on:
-            bake_mirror_pose(arm, L, puppet_arm_r(st))
+            bake_mirror_pose(arm, L)
         rig[p] = 0.0 if on else 1.0
         if getattr(st, "autokey", False):
             try:
@@ -2187,23 +2259,17 @@ class FSKR_OT_mesh_mirror_pose(bpy.types.Operator):
             except Exception:
                 pass
         rig.update_tag()
-        for a9 in (arm, puppet_arm_r(st)):
-            if a9 is not None:
-                a9.update_tag()
+        arm.update_tag()
         _redraw_ui(context)
         return {'FINISHED'}
 
 
-def bake_mirror_pose(arm, L, ar=None):
+def bake_mirror_pose(arm, L):
     """대칭 조종을 끄기 전: 복사본 뼈 자체 값 = 지금 거울 모양 (튀지 않게)."""
-    if ar is None:
-        return
-    for nm in _part_tree(ar, L.get("pp_root", "")):
-        pb = ar.pose.bones.get(nm)
+    for nm in _part_tree(arm, L.get("pp_root", "")):
         sp = arm.pose.bones.get(nm)
-        if pb is None:
-            continue
-        if sp is None:
+        pb = arm.pose.bones.get(mirror_name(nm))
+        if sp is None or pb is None:
             continue
         loc = sp.location
         pb.location = (-loc.x, loc.y, loc.z)
@@ -2268,7 +2334,8 @@ def draw_mesh_box(layout, s, st, L):
             else _tr("지금: 캔버스 앞"))
     if EY.sym_built(L):
         r = b.row(align=True)
-        if part_ob_r(L) is None:
+        if part_ob_r(L) is None or puppet_arm_r(st) is not None:
+            # 없거나 1.0.241 방식(별도 아마추어)이면 새 방식으로
             op = r.operator("fskr.mesh_mirror_make", icon='MOD_MIRROR',
                             text=_tr("대칭 복사 메시 만들기"))
             op.uid, op.lid = st.uid, L.lid

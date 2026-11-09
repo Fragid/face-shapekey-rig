@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.243
+
+### Fixed
+- Mirror-side bones (including the part root controller) could not be
+  selected, because they lived in a second armature that wasn't in Pose Mode.
+  Mirror bones now live in the same armature with a `.R` suffix. The mirror
+  mesh is a copy of the original whose vertex groups point at the `.R` bones,
+  and it re-syncs automatically after Edit Mode or weight painting on the
+  original. "Create Mirror Mesh" converts parts made with v1.0.241–242.
+
 ## v1.0.242
 
 ### Fixed
