@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.241
+
+### Added
+- Symmetric mesh parts: converting a part with symmetry copy now also creates
+  the opposite-side mesh (sharing mesh data and weights) and a mirrored bone
+  set in a second armature with the same bone names. Pins, IK, mesh edits
+  and weights are done once on the original side.
+- Mirror / Separate control per part (keyable rig property `<Part>_MirrorPose`):
+  the copy side bones mirror the original bones, or move independently.
+  Switching to Separate copies the current mirrored pose so nothing jumps.
+- "Create Mirror Mesh" converts symmetric mesh parts made before this version.
+
 ## v1.0.240
 
 ### Added

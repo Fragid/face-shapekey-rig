@@ -25,6 +25,9 @@ from . import eye as EY
 ARM_PREFIX = "FSKR_Puppet_"
 GN_REST = "FSKR_PartRest"
 GN_STICK = "FSKR_PartStick"
+GN_STICK2 = "FSKR_PartStick2"     # 1.0.241: 대칭 복사는 따로 오브젝트
+GN_MIRROR = "FSKR_PartMirror"
+MOD_MIRROR = "FSKR_Mirror"
 MOD_REST = "FSKR_Rest"
 MOD_ARM = "FSKR_Bones"
 MOD_STICK = "FSKR_Stick"
@@ -41,6 +44,42 @@ def mesh_on(L):
 def part_ob(L):
     nm = getattr(L, "mesh_ob", "")
     return bpy.data.objects.get(nm) if nm else None
+
+
+def part_ob_r(L):
+    """대칭 복사 쪽 메시 오브젝트 (메시를 같이 씀)."""
+    nm = L.get("mesh_ob_r", "") if hasattr(L, "get") else ""
+    return bpy.data.objects.get(nm) if nm else None
+
+
+def _p_mpose(st, L):
+    """대칭 조종 1 = 복사본 뼈가 원본 뼈를 거울로 따라감, 0 = 따로 (키 가능)."""
+    k = EY._pk(L)
+    return (k + "_MirrorPose") if k else "fskr_ey_%s_%s_mpose" % (st.uid,
+                                                                  L.lid)
+
+
+def mirror_map(arm):
+    """로컬 평면에서 대칭 복사 (UV u → 1-u): p' = M·p + t. (M 2×2, t)."""
+    B = arm["fskr_B"]
+    b11, b12, b21, b22 = B[0], B[1], B[2], B[3]
+    det = b11 * b22 - b12 * b21
+    a11, a12, a21, a22 = b22 / det, -b12 / det, -b21 / det, b11 / det
+    # M = A·D·B,  D = diag(-1, 1);  t = A·(1, 0)
+    m11 = -a11 * b11 + a12 * b21
+    m12 = -a11 * b12 + a12 * b22
+    m21 = -a21 * b11 + a22 * b21
+    m22 = -a21 * b12 + a22 * b22
+    return (m11, m12, m21, m22), (a11, a21)
+
+
+def mirror_pt(arm, x, y):
+    (m11, m12, m21, m22), (tx, ty) = mirror_map(arm)
+    return m11 * x + m12 * y + tx, m21 * x + m22 * y + ty
+
+
+def mirror_name(name):
+    return name + ".R"
 
 
 def arm_name(st):
@@ -324,6 +363,148 @@ def _gn_stick():
     Lk.new(sp2.outputs[0], go.inputs[0])
     ng["fskr_v"] = 1
     return ng
+
+
+def _gn_stick2():
+    """평면 좌표 → 캔버스 UV → 얼굴 표면 (+ 보이기). 대칭은 오브젝트로."""
+    ng = bpy.data.node_groups.get(GN_STICK2)
+    if ng is not None and ng.get("fskr_v") == 1:
+        return ng
+    if ng is None:
+        ng = bpy.data.node_groups.new(GN_STICK2, 'GeometryNodeTree')
+    ng.nodes.clear()
+    ng.interface.clear()
+    I = ng.interface
+    I.new_socket("Geometry", in_out='INPUT', socket_type='NodeSocketGeometry')
+    I.new_socket("Canvas", in_out='INPUT', socket_type='NodeSocketObject')
+    I.new_socket("UV Map", in_out='INPUT', socket_type='NodeSocketString')
+    I.new_socket("Row U", in_out='INPUT', socket_type='NodeSocketVector')
+    I.new_socket("Row V", in_out='INPUT', socket_type='NodeSocketVector')
+    I.new_socket("Offset", in_out='INPUT', socket_type='NodeSocketFloat')
+    sv = I.new_socket("Visible", in_out='INPUT', socket_type='NodeSocketBool')
+    sv.default_value = True
+    I.new_socket("Geometry", in_out='OUTPUT',
+                 socket_type='NodeSocketGeometry')
+    N, Lk = ng.nodes, ng.links
+    gi = N.new('NodeGroupInput')
+    gi.location = (-1200, 0)
+    go = N.new('NodeGroupOutput')
+    go.location = (1100, 0)
+
+    def nd(tp, x, y, **kw):
+        n = N.new(tp)
+        n.location = (x, y)
+        for k9, v9 in kw.items():
+            setattr(n, k9, v9)
+        return n
+    pos = nd('GeometryNodeInputPosition', -1000, -200)
+    du = nd('ShaderNodeVectorMath', -800, -150, operation='DOT_PRODUCT')
+    dv = nd('ShaderNodeVectorMath', -800, -300, operation='DOT_PRODUCT')
+    Lk.new(pos.outputs[0], du.inputs[0])
+    Lk.new(gi.outputs["Row U"], du.inputs[1])
+    Lk.new(pos.outputs[0], dv.inputs[0])
+    Lk.new(gi.outputs["Row V"], dv.inputs[1])
+    cu = nd('ShaderNodeCombineXYZ', -600, -200)
+    Lk.new(du.outputs["Value"], cu.inputs[0])
+    Lk.new(dv.outputs["Value"], cu.inputs[1])
+    sp = nd('GeometryNodeSetPosition', -400, 0)
+    Lk.new(gi.outputs["Geometry"], sp.inputs["Geometry"])
+    Lk.new(cu.outputs[0], sp.inputs["Position"])
+    oi = nd('GeometryNodeObjectInfo', -400, 400, transform_space='RELATIVE')
+    Lk.new(gi.outputs["Canvas"], oi.inputs["Object"])
+    na = nd('GeometryNodeInputNamedAttribute', -400, 250,
+            data_type='FLOAT_VECTOR')
+    Lk.new(gi.outputs["UV Map"], na.inputs["Name"])
+    cpos = nd('GeometryNodeInputPosition', -400, 150)
+    cnrm = nd('GeometryNodeInputNormal', -400, 100)
+    p9 = nd('GeometryNodeInputPosition', -200, 50)
+    outs = []
+    for i9, src in enumerate((cpos, cnrm)):
+        su = nd('GeometryNodeSampleUVSurface', 0, 400 - 200 * i9,
+                data_type='FLOAT_VECTOR')
+        Lk.new(oi.outputs["Geometry"], su.inputs["Mesh"])
+        Lk.new(src.outputs[0], su.inputs["Value"])
+        Lk.new(na.outputs["Attribute"], su.inputs["Source UV Map"])
+        Lk.new(p9.outputs[0], su.inputs["Sample UV"])
+        outs.append(su.outputs["Value"])
+    nn = nd('ShaderNodeVectorMath', 250, 250, operation='NORMALIZE')
+    Lk.new(outs[1], nn.inputs[0])
+    sc = nd('ShaderNodeVectorMath', 400, 250, operation='SCALE')
+    Lk.new(nn.outputs[0], sc.inputs[0])
+    Lk.new(gi.outputs["Offset"], sc.inputs["Scale"])
+    ad = nd('ShaderNodeVectorMath', 550, 300, operation='ADD')
+    Lk.new(outs[0], ad.inputs[0])
+    Lk.new(sc.outputs[0], ad.inputs[1])
+    sp2 = nd('GeometryNodeSetPosition', 700, 0)
+    Lk.new(sp.outputs[0], sp2.inputs["Geometry"])
+    Lk.new(ad.outputs[0], sp2.inputs["Position"])
+    sw = nd('GeometryNodeSwitch', 900, 0, input_type='GEOMETRY')
+    Lk.new(gi.outputs["Visible"], sw.inputs["Switch"])
+    Lk.new(sp2.outputs[0], sw.inputs["True"])
+    Lk.new(sw.outputs[0], go.inputs[0])
+    ng["fskr_v"] = 1
+    return ng
+
+
+def _gn_mirror():
+    """대칭 복사 쪽: 제자리 저장 뒤, 뼈 전에 평면 좌표를 거울로."""
+    ng = bpy.data.node_groups.get(GN_MIRROR)
+    if ng is not None and ng.get("fskr_v") == 1:
+        return ng
+    if ng is None:
+        ng = bpy.data.node_groups.new(GN_MIRROR, 'GeometryNodeTree')
+    ng.nodes.clear()
+    ng.interface.clear()
+    I = ng.interface
+    I.new_socket("Geometry", in_out='INPUT', socket_type='NodeSocketGeometry')
+    I.new_socket("Row X", in_out='INPUT', socket_type='NodeSocketVector')
+    I.new_socket("Row Y", in_out='INPUT', socket_type='NodeSocketVector')
+    I.new_socket("Offset", in_out='INPUT', socket_type='NodeSocketVector')
+    I.new_socket("Geometry", in_out='OUTPUT',
+                 socket_type='NodeSocketGeometry')
+    N, Lk = ng.nodes, ng.links
+    gi = N.new('NodeGroupInput')
+    go = N.new('NodeGroupOutput')
+    pos = N.new('GeometryNodeInputPosition')
+    dx = N.new('ShaderNodeVectorMath')
+    dx.operation = 'DOT_PRODUCT'
+    dy = N.new('ShaderNodeVectorMath')
+    dy.operation = 'DOT_PRODUCT'
+    Lk.new(pos.outputs[0], dx.inputs[0])
+    Lk.new(gi.outputs["Row X"], dx.inputs[1])
+    Lk.new(pos.outputs[0], dy.inputs[0])
+    Lk.new(gi.outputs["Row Y"], dy.inputs[1])
+    cb = N.new('ShaderNodeCombineXYZ')
+    Lk.new(dx.outputs["Value"], cb.inputs[0])
+    Lk.new(dy.outputs["Value"], cb.inputs[1])
+    ad = N.new('ShaderNodeVectorMath')
+    ad.operation = 'ADD'
+    Lk.new(cb.outputs[0], ad.inputs[0])
+    Lk.new(gi.outputs["Offset"], ad.inputs[1])
+    spn = N.new('GeometryNodeSetPosition')
+    Lk.new(gi.outputs["Geometry"], spn.inputs["Geometry"])
+    Lk.new(ad.outputs[0], spn.inputs["Position"])
+    Lk.new(spn.outputs[0], go.inputs[0])
+    for i, n in enumerate((gi, pos, dx, dy, cb, ad, spn, go)):
+        n.location = (-700 + 180 * i, 0)
+    ng["fskr_v"] = 1
+    return ng
+
+
+def _drv_simple(id9, path, expr, pairs):
+    """id9.path 에 드라이버 (pairs: [(이름, ID, data_path)])."""
+    fc = id9.driver_add(path)
+    d = fc.driver
+    d.type = 'SCRIPTED'
+    for v in list(d.variables):
+        d.variables.remove(v)
+    for vn, idv, dp in pairs:
+        v = d.variables.new()
+        v.name = vn
+        v.targets[0].id = idv
+        v.targets[0].data_path = dp
+    d.expression = expr
+    return fc
 
 
 def _mod_input(mod, ident):
@@ -747,36 +928,7 @@ def make_mesh_part(context, s, st, L, res=14):
         L["pp_root"] = root
         apply_shapes(arm)
     # 4) 모디파이어: 제자리 저장 → 뼈 → 얼굴에 붙이기
-    for m in list(ob.modifiers):
-        ob.modifiers.remove(m)
-    m1 = ob.modifiers.new(MOD_REST, 'NODES')
-    m1.node_group = _gn_rest()
-    m2 = ob.modifiers.new(MOD_ARM, 'ARMATURE')
-    m2.object = arm
-    m3 = ob.modifiers.new(MOD_STICK, 'NODES')
-    ng = _gn_stick()
-    m3.node_group = ng
-    B = arm["fskr_B"]
-    k = float(arm["fskr_k"])
-    _mod_set(m3, _sock_id(ng, "Canvas"), cob)
-    _mod_set(m3, _sock_id(ng, "UV Map"), _uv_name(cob, st))
-    _mod_set(m3, _sock_id(ng, "Row U"), (B[0], B[1], 0.0))
-    _mod_set(m3, _sock_id(ng, "Row V"), (B[2], B[3], 0.0))
-    mid = _sock_id(ng, "Mirror")
-    _mod_set(m3, mid, bool(EY.sym_built(L)))
-    try:
-        fc = ob.driver_add(_mod_path(m3, mid))
-        d = fc.driver
-        d.type = 'SCRIPTED'
-        for v9 in list(d.variables):
-            d.variables.remove(v9)
-        v9 = d.variables.new()
-        v9.name = "m"
-        v9.targets[0].id = rig
-        v9.targets[0].data_path = '["%s"]' % EY._p_sym(st, L)
-        d.expression = "m>=0.5"
-    except Exception as e:
-        print("FSKR part mirror driver:", e)
+    _setup_mods(ob, s, st, L, arm, cob, mirror=False)
     # 5) 웨이트 (핀이 없으면 뿌리 뼈에 전부)
     ob["fskr_uid"], ob["fskr_lid"] = st.uid, L.lid
     L.mesh_ob = ob.name
@@ -787,10 +939,218 @@ def make_mesh_part(context, s, st, L, res=14):
     ob.data.materials.append(mat)
     ob["fskr_aff"] = [aff[0][0], aff[0][1], aff[0][2],
                       aff[1][0], aff[1][1], aff[1][2]]
+    # 6-b) 대칭 복사 파츠면 반대쪽 메시·뼈도 (리깅은 같이, 조종은 대칭/개별)
+    if EY.sym_built(L):
+        ensure_mirror(context, s, st, L)
     # 7) 캔버스에서는 빼기 (eye_build 가 앞뒤 높이도 다시 맞춤)
     L.mesh_on = True
     EY.eye_build(s, st)
     return None
+
+
+def _setup_mods(ob, s, st, L, arm, cob, mirror=False):
+    """제자리 저장 → (대칭이면 거울) → 뼈 → 얼굴에 붙이기 + 보이기 드라이버.
+    보이기: 대칭 복사(키)와 보일 쪽(양쪽/원본만/복사본만)을 따름."""
+    rig = s.rig
+    for m in list(ob.modifiers):
+        ob.modifiers.remove(m)
+    if ob.animation_data is not None:
+        for fc in list(ob.animation_data.drivers):
+            ob.animation_data.drivers.remove(fc)
+    m1 = ob.modifiers.new(MOD_REST, 'NODES')
+    m1.node_group = _gn_rest()
+    if mirror:
+        mm = ob.modifiers.new(MOD_MIRROR, 'NODES')
+        g9 = _gn_mirror()
+        mm.node_group = g9
+        (m11, m12, m21, m22), (tx, ty) = mirror_map(arm)
+        _mod_set(mm, _sock_id(g9, "Row X"), (m11, m12, 0.0))
+        _mod_set(mm, _sock_id(g9, "Row Y"), (m21, m22, 0.0))
+        _mod_set(mm, _sock_id(g9, "Offset"), (tx, ty, 0.0))
+    m2 = ob.modifiers.new(MOD_ARM, 'ARMATURE')
+    m2.object = arm
+    m3 = ob.modifiers.new(MOD_STICK, 'NODES')
+    ng = _gn_stick2()
+    m3.node_group = ng
+    B = arm["fskr_B"]
+    _mod_set(m3, _sock_id(ng, "Canvas"), cob)
+    _mod_set(m3, _sock_id(ng, "UV Map"), _uv_name(cob, st))
+    _mod_set(m3, _sock_id(ng, "Row U"), (B[0], B[1], 0.0))
+    _mod_set(m3, _sock_id(ng, "Row V"), (B[2], B[3], 0.0))
+    vid = _sock_id(ng, "Visible")
+    pairs = [("m", rig, '["%s"]' % EY._p_sym(st, L)),
+             ("sd", rig, '["%s"]' % EY._p_side(st, L))]
+    # 보일 쪽: 0 = 양쪽, 1 = 원본만, 2 = 복사본만
+    expr = "(m>=0.5)*(abs(sd-1)>0.5)" if mirror else "1-(m>=0.5)*(sd>1.5)"
+    try:
+        EY._ensure_anim_props(rig, st, L)
+        _drv_simple(ob, _mod_path(m3, vid), expr, pairs)
+    except Exception as e:
+        print("FSKR part visible driver:", e)
+
+
+def arm_r_name(st):
+    return ARM_PREFIX + st.uid + "_R"
+
+
+def puppet_arm_r(st):
+    return bpy.data.objects.get(arm_r_name(st))
+
+
+def ensure_arm_r(context, st):
+    """대칭 복사 쪽 아마추어: 원본 아마추어와 같은 자리·부모. 뼈 이름도
+    원본과 같게 해서 메시(정점 그룹)를 그대로 같이 씀."""
+    arm = puppet_arm(st)
+    if arm is None:
+        return None
+    ar = puppet_arm_r(st)
+    if ar is not None:
+        return ar
+    ad = bpy.data.armatures.new(arm_r_name(st))
+    ad.display_type = arm.data.display_type
+    ar = bpy.data.objects.new(arm_r_name(st), ad)
+    for c in arm.users_collection:
+        c.objects.link(ar)
+    ar.show_in_front = True
+    for k9 in ("fskr_k", "fskr_B", "fskr_nsign", "fskr_uid"):
+        if k9 in arm:
+            ar[k9] = arm[k9]
+    ar["fskr_mirror"] = 1
+    ar.parent = arm.parent
+    ar.parent_type = arm.parent_type
+    if arm.parent_type == 'VERTEX_3':
+        ar.parent_vertices = arm.parent_vertices
+    ar.matrix_parent_inverse = arm.matrix_parent_inverse.copy()
+    ar.matrix_basis = arm.matrix_basis.copy()
+    return ar
+
+
+def _part_tree(arm, root):
+    """뿌리부터 (부모 먼저) 이 파츠의 뼈 이름들."""
+    out = []
+    b = arm.data.bones.get(root) if root else None
+    if b is None:
+        return out
+
+    def walk(x):
+        out.append(x.name)
+        for c in x.children:
+            walk(c)
+    walk(b)
+    return out
+
+
+def _mirror_cons(ar, name, arm, rig, prop):
+    """복사본 뼈가 원본 뼈(같은 이름)를 거울로 따라감.
+    세기 = 대칭 조종 (리그 프로퍼티, 키 가능)."""
+    pb = ar.pose.bones.get(name)
+    if pb is None:
+        return
+    if any(c.name == "FSKR mirror loc" for c in pb.constraints):
+        return
+    cl = pb.constraints.new('COPY_LOCATION')
+    cl.name = "FSKR mirror loc"
+    cl.invert_x = True
+    cr = pb.constraints.new('COPY_ROTATION')
+    cr.name = "FSKR mirror rot"
+    cr.invert_y = True
+    cr.invert_z = True
+    cs = pb.constraints.new('COPY_SCALE')
+    cs.name = "FSKR mirror scale"
+    for c in (cl, cr, cs):
+        c.target = arm
+        c.subtarget = name
+        c.owner_space = 'LOCAL'
+        c.target_space = 'LOCAL'
+        try:
+            _drv_simple(ar, 'pose.bones["%s"].constraints["%s"].influence'
+                        % (name, c.name), "min(max(m,0),1)",
+                        [("m", rig, '["%s"]' % prop)])
+        except Exception as e:
+            print("FSKR mirror influence:", e)
+
+
+def sync_mirror(context, s, st, L):
+    """원본 쪽 뼈(이 파츠)를 복사본 아마추어에 거울로 맞춤:
+    없는 뼈 만들기, 위치 갱신, 원본에서 지운 뼈 지우기, 거울 제약·IK."""
+    if part_ob_r(L) is None:
+        return
+    arm = puppet_arm(st)
+    ar = ensure_arm_r(context, st)
+    if arm is None or ar is None:
+        return
+    rig = s.rig
+    root = L.get("pp_root", "")
+    names = _part_tree(arm, root)
+    old = set(_part_tree(ar, root))
+    info = []
+    for nm in names:
+        b = arm.data.bones[nm]
+        info.append((nm, b.parent.name if b.parent is not None and nm != root
+                     else None,
+                     mirror_pt(arm, b.head_local.x, b.head_local.y),
+                     mirror_pt(arm, b.tail_local.x, b.tail_local.y),
+                     b.use_deform,
+                     {k9: b[k9] for k9 in ("fskr_pin", "fskr_root", "fskr_ik",
+                                           "fskr_size") if k9 in b}))
+
+    def mk(eb):
+        for nm in old - set(names):
+            x = eb.get(nm)
+            if x is not None:
+                eb.remove(x)
+        for nm, par, h, t, dfm, props in info:
+            r = eb.get(nm) or eb.new(nm)
+            r.head = (h[0], h[1], 0.0)
+            r.tail = (t[0], t[1], 0.0)
+            r.roll = 0.0
+            r.parent = eb.get(par) if par else None
+            r.use_connect = False
+            r.use_deform = dfm
+            for k9, v9 in props.items():
+                r[k9] = v9
+    _edit_bones(context, ar, mk)
+    apply_shapes(ar)
+    prop = _p_mpose(st, L)
+    EY._ensure_float(rig, prop, 1.0, 0.0, 1.0)
+    for nm in names:
+        _mirror_cons(ar, nm, arm, rig, prop)
+        src, dst = arm.pose.bones.get(nm), ar.pose.bones.get(nm)
+        if src is None or dst is None:
+            continue
+        iks = [c for c in src.constraints if c.type == 'IK']
+        for c in list(dst.constraints):
+            if c.type == 'IK':
+                dst.constraints.remove(c)
+        for c in iks:
+            c2 = dst.constraints.new('IK')
+            c2.target = ar
+            c2.subtarget = c.subtarget
+            c2.chain_count = c.chain_count
+
+
+def ensure_mirror(context, s, st, L):
+    """대칭 복사 쪽 메시 오브젝트(메시는 원본과 같이 씀)와 뼈."""
+    arm, ob = puppet_arm(st), part_ob(L)
+    if arm is None or ob is None:
+        return None
+    ar = ensure_arm_r(context, st)
+    obr = part_ob_r(L)
+    if obr is None:
+        obr = bpy.data.objects.new(ob.name + ".R", ob.data)
+        for c in ob.users_collection:
+            c.objects.link(obr)
+    else:
+        obr.data = ob.data
+    obr.parent = ar
+    obr.parent_type = 'OBJECT'
+    obr.matrix_parent_inverse = Matrix.Identity(4)
+    obr.matrix_basis = Matrix.Identity(4)
+    obr["fskr_uid"], obr["fskr_lid"], obr["fskr_mirror"] = st.uid, L.lid, 1
+    L["mesh_ob_r"] = obr.name
+    _setup_mods(obr, s, st, L, ar, _canvas(st), mirror=True)
+    sync_mirror(context, s, st, L)
+    return obr
 
 
 def _canvas_gap(st):
@@ -934,6 +1294,11 @@ def update_offsets(s, st, context=None):
         L["mesh_back"] = back
         _mod_set(m, _sock_id(m.node_group, "Offset"), off / k * sg)
         ob.update_tag()
+        obr = part_ob_r(L)
+        mr = obr.modifiers.get(MOD_STICK) if obr is not None else None
+        if mr is not None and mr.node_group is not None:
+            _mod_set(mr, _sock_id(mr.node_group, "Offset"), off / k * sg)
+            obr.update_tag()
     try:
         for win in bpy.context.window_manager.windows:
             for ar in win.screen.areas:
@@ -1010,6 +1375,10 @@ def recompute_weights(arm, ob, L):
 def remove_mesh_part(context, s, st, L):
     ob = part_ob(L)
     arm = puppet_arm(st)
+    obr = part_ob_r(L)
+    if obr is not None:
+        bpy.data.objects.remove(obr)
+    L["mesh_ob_r"] = ""
     if ob is not None:
         me = ob.data
         bpy.data.objects.remove(ob)
@@ -1019,7 +1388,10 @@ def remove_mesh_part(context, s, st, L):
     if mat is not None and mat.users == 0:
         bpy.data.materials.remove(mat)
     root = L.get("pp_root", "")
-    if arm is not None and root in arm.data.bones:
+    for a9 in (arm, puppet_arm_r(st)):
+        if a9 is None or not root or root not in a9.data.bones:
+            continue
+
         def rm(eb):
             b = eb.get(root)
             if b is None:
@@ -1028,8 +1400,9 @@ def remove_mesh_part(context, s, st, L):
                 eb.remove(c)
             # IK 대상 뼈 (뿌리에 붙어 있음)도 위에서 같이 지워짐
             eb.remove(b)
-        _edit_bones(context, arm, rm)
+        _edit_bones(context, a9, rm)
     L["pp_root"] = ""
+    L["pp_root_r"] = ""
     L.mesh_ob = ""
     L.mesh_on = False
     EY.eye_build(s, st)
@@ -1175,8 +1548,11 @@ class FSKR_OT_mesh_mode(bpy.types.Operator):
             vl.objects.active = ob
             bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
         elif self.mode == 'POSE':
-            arm.hide_set(False)
-            arm.select_set(True)
+            ar = puppet_arm_r(st)
+            for a9 in (arm, ar):
+                if a9 is not None:
+                    a9.hide_set(False)
+                    a9.select_set(True)
             vl.objects.active = arm
             bpy.ops.object.mode_set(mode='POSE')
         return {'FINISHED'}
@@ -1439,6 +1815,19 @@ def _pin_len(arm, L):
     return max(b.length / 3.0, 0.002)
 
 
+def _to_source_side(arm, ob, L, hit):
+    """대칭 복사 쪽을 클릭했으면 원본 쪽 좌표로 (핀은 원본에 만들고 거울로)."""
+    if part_ob_r(L) is None or not len(ob.data.vertices):
+        return hit
+    x, y = hit
+    mx, my = mirror_pt(arm, x, y)
+
+    def dmin(px, py):
+        return min((v.co.x - px) ** 2 + (v.co.y - py) ** 2
+                   for v in ob.data.vertices)
+    return (mx, my) if dmin(mx, my) < dmin(x, y) else hit
+
+
 def add_pin(context, arm, ob, L, x, y, parent=None):
     """핀 뼈 하나 추가 (부모 = parent 핀이면 사슬, 아니면 뿌리)."""
     root = L.get("pp_root", "")
@@ -1467,6 +1856,9 @@ def add_pin(context, arm, ob, L, x, y, parent=None):
     nm = _edit_bones(context, arm, mk)
     apply_shapes(arm)
     recompute_weights(arm, ob, L)
+    st9 = EY._owner(L)
+    if st9 is not None:
+        sync_mirror(context, context.scene.fskr, st9, L)
     return nm
 
 
@@ -1682,6 +2074,7 @@ class FSKR_OT_mesh_pin(bpy.types.Operator):
             hit = _plane_hit(context, arm, mp)
             if hit is None:
                 return {'RUNNING_MODAL'}
+            hit = _to_source_side(arm, ob, L, hit)
             par = self.last if ev.shift else None
             nm = add_pin(context, arm, ob, L, hit[0], hit[1], par)
             self.added.append(nm)
@@ -1709,6 +2102,10 @@ class FSKR_OT_mesh_ik(bpy.types.Operator):
             return {'CANCELLED'}
         b = arm.data.bones.active
         pins = set(pin_bones(arm, L))
+        ar = puppet_arm_r(st)
+        if ar is not None and context.active_object == ar and \
+                ar.data.bones.active is not None:
+            b = arm.data.bones.get(ar.data.bones.active.name)  # 복사본 → 원본
         if b is None or b.name not in pins:
             self.report({'WARNING'}, _tr("포즈 모드에서 이 파츠의 핀을 "
                                          "하나 고르세요"))
@@ -1743,6 +2140,7 @@ class FSKR_OT_mesh_ik(bpy.types.Operator):
         c.target = arm
         c.subtarget = tname
         c.chain_count = len(chain)
+        sync_mirror(context, s, st, L)
         vl = context.view_layer
         vl.objects.active = arm
         try:
@@ -1753,6 +2151,89 @@ class FSKR_OT_mesh_ik(bpy.types.Operator):
         except Exception:
             pass
         self.report({'INFO'}, _tr("IK 컨트롤러: ") + tname)
+        return {'FINISHED'}
+
+
+class FSKR_OT_mesh_mirror_pose(bpy.types.Operator):
+    bl_idname = "fskr.mesh_mirror_pose"
+    bl_label = "대칭 조종"
+    bl_description = ("켜면 복사본 쪽 뼈가 원본 쪽 뼈를 거울로 따라갑니다. "
+                      "끄면 양쪽을 따로 움직입니다 (윙크 등). 끌 때 지금 "
+                      "모양을 복사본 뼈에 옮겨 두어 튀지 않습니다. "
+                      "리그 프로퍼티라 키를 넣을 수 있습니다")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    uid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    lid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        s, st, L = _ctx(self, context)
+        arm = puppet_arm(st) if st else None
+        if arm is None or L is None or s.rig is None:
+            return {'CANCELLED'}
+        rig = s.rig
+        p = _p_mpose(st, L)
+        EY._ensure_float(rig, p, 1.0, 0.0, 1.0)
+        on = float(rig.get(p, 1.0)) >= 0.5
+        if on:
+            bake_mirror_pose(arm, L, puppet_arm_r(st))
+        rig[p] = 0.0 if on else 1.0
+        if getattr(st, "autokey", False):
+            try:
+                EY.kfi(rig, data_path='["%s"]' % p, group="Face Parts")
+            except Exception:
+                pass
+        rig.update_tag()
+        for a9 in (arm, puppet_arm_r(st)):
+            if a9 is not None:
+                a9.update_tag()
+        _redraw_ui(context)
+        return {'FINISHED'}
+
+
+def bake_mirror_pose(arm, L, ar=None):
+    """대칭 조종을 끄기 전: 복사본 뼈 자체 값 = 지금 거울 모양 (튀지 않게)."""
+    if ar is None:
+        return
+    for nm in _part_tree(ar, L.get("pp_root", "")):
+        pb = ar.pose.bones.get(nm)
+        sp = arm.pose.bones.get(nm)
+        if pb is None:
+            continue
+        if sp is None:
+            continue
+        loc = sp.location
+        pb.location = (-loc.x, loc.y, loc.z)
+        q = sp.matrix_basis.to_quaternion()
+        rq = (q.w, q.x, -q.y, -q.z)
+        if pb.rotation_mode == 'QUATERNION':
+            pb.rotation_quaternion = rq
+        else:
+            from mathutils import Quaternion
+            pb.rotation_euler = Quaternion(rq).to_euler(pb.rotation_mode)
+        pb.scale = sp.scale.copy()
+
+
+class FSKR_OT_mesh_mirror_make(bpy.types.Operator):
+    bl_idname = "fskr.mesh_mirror_make"
+    bl_label = "대칭 복사 메시 만들기"
+    bl_description = ("대칭 복사가 켜진 파츠의 반대쪽 메시와 뼈를 만듭니다 "
+                      "(리깅은 원본을 그대로 따라감)")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    uid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    lid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        s, st, L = _ctx(self, context)
+        if L is None or part_ob(L) is None:
+            return {'CANCELLED'}
+        ob = part_ob(L)
+        # 예전(1.0.240 이전) 방식의 원본 모디파이어도 새 방식으로
+        _setup_mods(ob, s, st, L, puppet_arm(st), _canvas(st), mirror=False)
+        ensure_mirror(context, s, st, L)
+        update_offsets(s, st, context)
+        _redraw_ui(context)
         return {'FINISHED'}
 
 
@@ -1782,6 +2263,27 @@ def draw_mesh_box(layout, s, st, L):
     h.active = False
     h.label(text=_tr("지금: 캔버스 뒤") if L.get("mesh_back")
             else _tr("지금: 캔버스 앞"))
+    if EY.sym_built(L):
+        r = b.row(align=True)
+        if part_ob_r(L) is None:
+            op = r.operator("fskr.mesh_mirror_make", icon='MOD_MIRROR',
+                            text=_tr("대칭 복사 메시 만들기"))
+            op.uid, op.lid = st.uid, L.lid
+        else:
+            pm = _p_mpose(st, L)
+            on = float(s.rig.get(pm, 1.0)) >= 0.5
+            r.label(text=_tr("조종"), icon='MOD_MIRROR')
+            op = r.operator("fskr.mesh_mirror_pose", depress=on,
+                            text=_tr("대칭"))
+            op.uid, op.lid = st.uid, L.lid
+            op = r.operator("fskr.mesh_mirror_pose", depress=not on,
+                            text=_tr("개별"))
+            op.uid, op.lid = st.uid, L.lid
+            if pm in s.rig.keys():
+                # 마우스를 올리고 I = 대칭/개별 전환을 키로
+                sub = r.row(align=True)
+                sub.ui_units_x = 3
+                sub.prop(s.rig, '["%s"]' % pm, text="")
     r = b.row()
     r.scale_y = 1.4
     op = r.operator("fskr.mesh_pin", icon='BONE_DATA', text=_tr("핀 찍기"))
@@ -1814,4 +2316,5 @@ def draw_mesh_box(layout, s, st, L):
 puppet_classes = (FSKR_OT_mesh_make, FSKR_OT_mesh_remove,
                   FSKR_OT_mesh_weights, FSKR_OT_mesh_mode, FSKR_OT_mesh_pin,
                   FSKR_OT_mesh_ik, FSKR_OT_mesh_edit_guard,
-                  FSKR_OT_mesh_weight_smooth)
+                  FSKR_OT_mesh_weight_smooth, FSKR_OT_mesh_mirror_pose,
+                  FSKR_OT_mesh_mirror_make)
