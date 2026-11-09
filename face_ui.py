@@ -3080,7 +3080,8 @@ def draw_part_props(col, context, s, st, L, rig, mouth_panel=False):
                      if sd9 == "L" else
                      _tr("원본 = 화면 오른쪽, 복사본 = 화면 왼쪽"),
                      icon='INFO')
-    EY.draw_pins(b, s, st, L)
+    from . import puppet as PP
+    PP.draw_mesh_box(b, s, st, L)
     # 키: 이 파츠의 지금 값 전부 (칸·배치·불투명도·크롭)
     b.separator(factor=0.5)
     kb = b.row(align=True)
@@ -4297,6 +4298,46 @@ class _PartTransformBase:
             return {'CANCELLED'}
         self.uid, self.lid = st.uid, L.lid
         self.area, self.reg = area, reg
+        cur = self._setup_space(context, s, st, L, ob)
+        self.cur = cur
+        self.orig = list(cur)
+        self.hist = []
+        self.redo = []
+        self.orig_c = Vector(self.c)
+        self.orig_pv = (L.get("pivot", 0), tuple(L.pivot_uv),
+                        L.get("pivot_cur", ""))
+        self.pivot_moved = False
+        self.pv_drag = None
+        self.mp_start = None
+        self.uvmap = _UVMap(context, ob, st.uv_map)
+        # 얼굴 정면 · 직교(Ortho) 뷰로: 원근 때문에 기울어 보이지 않게
+        # (view_axis 연산자는 부드러운 전환 애니메이션이 끝날 때 원근으로
+        #  되돌릴 수 있어서, 회전값을 직접 넣어 즉시 바꿈)
+        try:
+            import math as m
+            from mathutils import Euler
+            zr = {'-Y': 0.0, 'Y': m.pi, 'X': m.pi / 2,
+                  '-X': -m.pi / 2}.get(getattr(s, "face_axis", '-Y'), 0.0)
+            rv3d = area.spaces.active.region_3d
+            rv3d.view_rotation = Euler((m.pi / 2, 0.0, zr)).to_quaternion()
+            rv3d.view_perspective = 'ORTHO'
+        except Exception as e:
+            print("FSKR transform view:", e)
+        self.J = self.J0 = None
+        self.btns = None
+        self.hover = None
+        self.mode = None
+        _XF["op"] = self
+        _XF["abort"] = False
+        if _XF["h"] is None:
+            _XF["h"] = bpy.types.SpaceView3D.draw_handler_add(
+                _xf_draw, (), 'WINDOW', 'POST_PIXEL')
+        context.window_manager.modal_handler_add(self)
+        area.tag_redraw()
+        return {'RUNNING_MODAL'}
+
+    def _setup_space(self, context, s, st, L, ob):
+        """파츠 공간 q ↔ 캔버스 UV 계산에 필요한 값 (rest, inh, cur)."""
         ast, aL = EY._anim_source(s, st, L)
         self.P = EY._anim_props(ast, aL)
         self.cell = EY.cell_table(s, st, L) is not None
@@ -4345,41 +4386,7 @@ class _PartTransformBase:
             self.inh = EY.layer_inh_aff(s, st, L)
             self.inh_inv = EY.aff_inv(self.inh)
         self.cur = cur
-        self.orig = list(cur)
-        self.hist = []
-        self.redo = []
-        self.orig_c = Vector(self.c)
-        self.orig_pv = (L.get("pivot", 0), tuple(L.pivot_uv),
-                        L.get("pivot_cur", ""))
-        self.pivot_moved = False
-        self.pv_drag = None
-        self.mp_start = None
-        self.uvmap = _UVMap(context, ob, st.uv_map)
-        # 얼굴 정면 · 직교(Ortho) 뷰로: 원근 때문에 기울어 보이지 않게
-        # (view_axis 연산자는 부드러운 전환 애니메이션이 끝날 때 원근으로
-        #  되돌릴 수 있어서, 회전값을 직접 넣어 즉시 바꿈)
-        try:
-            import math as m
-            from mathutils import Euler
-            zr = {'-Y': 0.0, 'Y': m.pi, 'X': m.pi / 2,
-                  '-X': -m.pi / 2}.get(getattr(s, "face_axis", '-Y'), 0.0)
-            rv3d = area.spaces.active.region_3d
-            rv3d.view_rotation = Euler((m.pi / 2, 0.0, zr)).to_quaternion()
-            rv3d.view_perspective = 'ORTHO'
-        except Exception as e:
-            print("FSKR transform view:", e)
-        self.J = self.J0 = None
-        self.btns = None
-        self.hover = None
-        self.mode = None
-        _XF["op"] = self
-        _XF["abort"] = False
-        if _XF["h"] is None:
-            _XF["h"] = bpy.types.SpaceView3D.draw_handler_add(
-                _xf_draw, (), 'WINDOW', 'POST_PIXEL')
-        context.window_manager.modal_handler_add(self)
-        area.tag_redraw()
-        return {'RUNNING_MODAL'}
+        return cur
 
     def _push(self):
         """변형 안 되돌리기 기록 (드래그·방향키 시작 때)."""
@@ -4578,6 +4585,21 @@ class FSKR_OT_part_transform_key(_PartTransformBase, bpy.types.Operator):
         return (s.rig is not None and ob is not None
                 and context.mode == 'OBJECT'
                 and any(ob.name == e.target for e in s.eyes))
+
+
+class _QSpace(_PartTransformBase):
+    """오퍼레이터 없이 파츠 공간 q → 캔버스 UV 계산만 (메시 파츠 만들기용)."""
+
+
+def part_space(context, s, st, L):
+    """q → UV 함수를 가진 객체 (지금 배치·칸·부모 상속 반영) 또는 None."""
+    ob = bpy.data.objects.get(st.target)
+    if ob is None:
+        return None
+    o = _QSpace()
+    o.uid, o.lid = st.uid, L.lid
+    o._setup_space(context, s, st, L, ob)
+    return o
 
 
 def _pin_ctx(op9, context):

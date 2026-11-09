@@ -122,6 +122,7 @@ from .face_ui import face_classes, face_register, face_unregister
 from .preset_vp import pvp_classes, pvp_register, pvp_unregister
 from .layer_vp import lvp_classes, lvp_register, lvp_unregister
 from .ime import ime_classes, ime_register, ime_unregister
+from .puppet import puppet_classes
 from .panels import (
     FSKR_PT_setup,
     FSKR_PT_list,
@@ -166,7 +167,7 @@ classes = (FSKR_CollectionItem, FSKR_PresetItem, FSKR_ChainItem,
            FSKR_OT_lipsync_edit, FSKR_OT_lipsync_sound_del,
            FSKR_OT_lipsync_apply, FSKR_OT_lipsync_seek,
            FSKR_OT_mocap_map_add, FSKR_OT_mocap_map_del,
-           ) + atlas_classes + vp_classes + eye_classes + face_classes + pvp_classes + lvp_classes + ime_classes + (
+           ) + atlas_classes + vp_classes + eye_classes + face_classes + pvp_classes + lvp_classes + ime_classes + puppet_classes + (
            FSKR_Prefs,
            FSKR_PT_mode,
            FSKR_PT_setup, FSKR_PT_list, FSKR_PT_atlas, FSKR_PT_presets,

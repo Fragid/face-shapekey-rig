@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.0.237
+
+### Added
+- Mesh Parts (experimental), in the style of Spine / Live2D: convert a part
+  into a real mesh object that sticks to the face canvas (follows shape keys
+  and head motion via Sample UV Surface).
+  - A triangle mesh is generated where the drawing is; edit it freely in
+    Edit Mode (new points get the right drawing position automatically).
+  - Place pins in the viewport; each pin is a bone in one puppet armature
+    per canvas. Shift+click chains pins. Weights are computed from distance
+    and can be painted in Weight Paint mode.
+  - Create IK controllers for pin chains (Blender IK constraint).
+  - Cell switching, keyable opacity / visibility and symmetry copy carry
+    over. Mesh parts sit behind the canvas when canvas parts are above them
+    in the list, otherwise in front.
+
+### Changed
+- The shader-based Puppet Pins from v1.0.236 are replaced by Mesh Parts.
+
 ## v1.0.236
 
 ### Changed

@@ -2379,6 +2379,13 @@ class FSKR_EyeLayer(bpy.types.PropertyGroup):
                     "넣을 수 있습니다")
     pin_rest: bpy.props.FloatVectorProperty(size=16, default=(0.0,) * 16)
     pin_act: bpy.props.BoolVectorProperty(size=8, default=(False,) * 8)
+    # 메시 파츠 (실험): 캔버스 셰이더 대신 메시 오브젝트로 그림
+    mesh_on: bpy.props.BoolProperty(default=False)
+    mesh_ob: bpy.props.StringProperty(default="")
+    mesh_res: bpy.props.IntProperty(
+        name="메시 촘촘함", default=14, min=3, max=60,
+        description="그림의 긴 쪽을 몇 칸으로 나눌지. 많을수록 부드럽게 "
+                    "휘지만 무거워집니다")
 
 
 class FSKR_FaceSheet(bpy.types.PropertyGroup):
@@ -4032,6 +4039,11 @@ def eye_build(s, st):
             over_sync(s, st)
         except Exception as e:
             print("FSKR over:", e)
+        try:
+            from . import puppet as PP
+            PP.update_offsets(s, st)
+        except Exception as e:
+            print("FSKR mesh parts:", e)
     return err
 
 
@@ -4175,7 +4187,9 @@ def _eye_mat(s, st, over=False):
     gy_dp = 'pose.bones["%s"].location[1]' % gpad
 
     # 숨긴 파츠도 셰이더에 넣고 '보이기' 값(키 가능)으로 끈다
-    layers = [L for L in lst.layers if _layer_image(s, L) is not None]
+    # 메시로 꺼낸 파츠는 캔버스에서 그리지 않음 (메시 오브젝트가 그림)
+    layers = [L for L in lst.layers if _layer_image(s, L) is not None
+              and not getattr(L, "mesh_on", False)]
     draw_lids = None
     if over:
         # 앞쪽에 그릴 파츠 + 그 파츠의 클리핑 마스크로 쓰이는 파츠(마스크만)
@@ -7907,7 +7921,8 @@ class FSKR_PT_eyes(bpy.types.Panel):
         r = db.row(align=True)
         r.prop(L, "flip_x", toggle=True, icon='MOD_MIRROR')
         r.prop(L, "sym", toggle=True, icon='MOD_MIRROR')
-        draw_pins(db, s, st, L)
+        from . import puppet as PP
+        PP.draw_mesh_box(db, s, st, L)
         # 색조/채도/명도
         hb = db.column(align=True)
         hr = hb.row(align=True)
