@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.0.236
+
+### Changed
+- Warp Shape (3×3 numeric grid) is replaced by Puppet Pins (experimental),
+  modeled on After Effects' Puppet Pin tool.
+
+### Added
+- Puppet Pin tool in the viewport: click the drawing to place a pin, drag
+  pins to bend it, Shift-click to select several, X/Delete to remove,
+  Ctrl+Z to undo inside the tool. Up to 8 pins per part.
+- Pin offsets are keyable rig properties (`<Part>_Pin1_X`, …) and are saved
+  in keys, expression presets and part folders. Change frames with the arrow
+  keys while the tool is open and press I (or use auto key) to animate.
+- Deformation is rigid moving least squares computed in the shader, so the
+  drawing bends and rotates between pins without stretching. Moving pins only
+  updates driver values; the material is not rebuilt.
+- With Puppet Pins off, the material is identical to v1.0.234.
+
 ## v1.0.235
 
 ### Added

@@ -2370,17 +2370,15 @@ class FSKR_EyeLayer(bpy.types.PropertyGroup):
         description="종횡비 고정 중: 세로를 바꾸면 가로도 같은 비율로")
     pick: bpy.props.EnumProperty(name="칸", items=_cell_items,
                                  get=_cell_get, set=_cell_set)
-    # 모양 휘기 (실험): 3×3 격자 점 9개의 (x, y) 이동량, 세기 1일 때
-    #   순서: 아래 줄 왼→오, 가운데 줄, 위 줄. 단위 = 파츠 크기(1)
-    warp_on: bpy.props.BoolProperty(
-        name="모양 휘기", default=False,
-        update=lambda s, c: _warp_on_cb(s, c),
-        description="파츠 그림을 3×3 격자로 휩니다 (실험 기능). "
-                    "휘는 정도는 리그 프로퍼티 _Warp (0~1, 키 가능)")
-    warp_d: bpy.props.FloatVectorProperty(
-        size=18, default=(0.0,) * 18, step=1, precision=3,
-        update=lambda s, c: _warp_d_cb(s, c))
-    show_warp: bpy.props.BoolProperty(default=True)
+    # 퍼펫 핀 (실험): 핀 PIN_MAX개의 제자리(반전 0 기준 파츠 공간)와 켜짐
+    pin_on: bpy.props.BoolProperty(
+        name="퍼펫 핀", default=False,
+        update=lambda s, c: _pin_on_cb(s, c),
+        description="애프터 이펙트 퍼펫 핀처럼 그림에 핀을 꽂고 핀을 옮겨 "
+                    "휩니다 (실험 기능). 핀 이동량은 리그 프로퍼티라 키를 "
+                    "넣을 수 있습니다")
+    pin_rest: bpy.props.FloatVectorProperty(size=16, default=(0.0,) * 16)
+    pin_act: bpy.props.BoolVectorProperty(size=8, default=(False,) * 8)
 
 
 class FSKR_FaceSheet(bpy.types.PropertyGroup):
@@ -2966,14 +2964,15 @@ def _anim_props(st, L):
             _p_crop(st, L, "t"), _p_crop(st, L, "b"),
             _p_crop(st, L, "l"), _p_crop(st, L, "r"), _p_vis(st, L),
             _p_flip(st, L), _p_side(st, L), _p_sym(st, L)) + \
-        ((_p_warp(st, L),) if warp_on(L) else ())
+        (_pin_props(st, L) if pin_on(L) else ())
 
 
-# 모양 휘기(warp)는 켠 파츠만 맨 끝에 붙음 (zip이 짧은 쪽에 맞춰 끊김)
+# 퍼펫 핀 이동량은 켠 파츠만 맨 끝에 붙음 (zip이 짧은 쪽에 맞춰 끊김)
 ANIM_KEYS = ("op", "px", "py", "sx", "sy", "rot", "ct", "cb", "cl", "cr",
-             "vis", "flip", "side", "sym", "warp")
+             "vis", "flip", "side", "sym") + tuple(
+                 "pin%d%s" % (n + 1, a) for n in range(8) for a in "xy")
 ANIM_DEFAULTS = (1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-                 0.0, 0.0, 0.0)
+                 0.0, 0.0) + (0.0,) * 16
 CONST_KEYS = ("vis", "flip", "side", "sym")   # 항상 Constant 보간
 _CONST_SUFFIX = ("_Visible", "_vis", "_Flip", "_flip", "_Side", "_side",
                  "_Mirror", "_mirror")
@@ -3010,177 +3009,152 @@ def _ensure_anim_props(rig, st, L):
         if raw:
             L["sym_built"] = True
     _ensure_float(rig, pm, 0.0, 0.0, 1.0)
-    if warp_on(L):
-        _ensure_float(rig, _p_warp(st, L), 0.0, 0.0, 1.0)
+    if pin_on(L):
+        for p in _pin_props(st, L):
+            _ensure_float(rig, p, 0.0, -1.0e4, 1.0e4, (-1.0, 1.0))
 
 
 # ------------------------------------------------------------------
-# 모양 휘기 (격자 변형, 실험 단계)
-#   편집: 정방향 격자 F(s) = s + Σ Bi(su)·Bj(sv)·w·Dij  (2차 베지어 3×3)
-#         s = 그림 좌표, F(s) = 화면(파츠 공간 q)에서 그 점이 보이는 곳
-#   렌더: 역방향 필드 s ≈ q + Σ Bi(qu)·Bj(qv)·Qij  (셰이더는 이것만 계산)
-#   Qij 는 w = 0.25, 0.5, 0.75, 1 에서 미리 최소제곱으로 맞춰 두고
-#   드라이버 식(Simple Expression)으로 w 사이를 직선 보간한다.
-#   w = 0 이면 G = 0 → 변형 전과 똑같음.
+# 퍼펫 핀 (애프터 이펙트 Puppet Pin 방식, 실험 단계)
+#   그림 위에 핀을 꽂고(제자리 = rest) 핀을 옮기면(이동량 = 리그 프로퍼티,
+#   키 가능) 그림이 핀을 따라 휜다. 셰이더는 화면 점 → 그림 점을
+#   '강체 MLS'(Moving Least Squares, Schaefer 2006)로 바로 계산한다:
+#     출발점 = 지금 핀 위치 s_i, 도착점 = 제자리 t_i
+#     w_i = 1 / (|v - s_i|² + ε)
+#     S = Σw s / Σw,  T = Σw t / Σw
+#     c = Σw conj(s_i - S)·(t_i - T)    (복소수: 회전만 뽑음)
+#     f(v) = T + (v - S)·c/|c|   (|(v-S)·c| = |v-S|·|c| 이라 강체와 같음)
+#   핀이 제자리면 f(v) = v (변형 없음). 핀 칸은 파츠마다 PIN_MAX개를 미리
+#   만들어 두고, 핀 추가·삭제·이동은 노드 값·드라이버 식만 바꾼다.
+#   좌표는 반전 전 화면 기준 파츠 공간 q. 제자리는 반전 0 기준으로 저장하고
+#   반전(키 가능)이면 u → 1-u 로 같이 뒤집는다.
 # ------------------------------------------------------------------
 
-WARP_STEPS = (0.25, 0.5, 0.75, 1.0)
+PIN_MAX = 8
+PIN_WEPS = 1e-4     # 가중치 ε (핀 바로 위에서 무한대 방지)
+PIN_CEPS = 1e-4     # 회전 c 의 ε (핀이 하나뿐이면 회전 없음)
 
 
-def _p_warp(st, L):
-    """모양 휘기 정도 0~1 (키·프리셋·폴더에 들어감)."""
+def pin_on(L):
+    return bool(getattr(L, "pin_on", False))
+
+
+def _p_pin(st, L, n, ax):
+    """핀 n(0부터)의 이동량 x/y (리그 프로퍼티, 키 가능)."""
     k = _pk(L)
-    return (k + "_Warp") if k else "fskr_ey_%s_%s_warp" % (st.uid, L.lid)
+    a = "X" if ax == 0 else "Y"
+    return ("%s_Pin%d_%s" % (k, n + 1, a)) if k else \
+        "fskr_ey_%s_%s_pin%d%s" % (st.uid, L.lid, n + 1, a.lower())
 
 
-def warp_on(L):
-    return bool(getattr(L, "warp_on", False))
+def _pin_props(st, L):
+    out = []
+    for n in range(PIN_MAX):
+        out += [_p_pin(st, L, n, 0), _p_pin(st, L, n, 1)]
+    return tuple(out)
 
 
-def _bern(t):
-    o = 1.0 - t
-    return (o * o, 2.0 * t * o, t * t)
+PIN_KEYS = tuple("pin%d%s" % (n + 1, a) for n in range(PIN_MAX)
+                 for a in "xy")
 
 
-def _bern_d(t):
-    return (-2.0 * (1.0 - t), 2.0 - 4.0 * t, 2.0 * t)
+def pin_rest(L, n, f=0.0):
+    """핀 n의 제자리 (반전 f 반영, 파츠 공간)."""
+    rx, ry = float(L.pin_rest[n * 2]), float(L.pin_rest[n * 2 + 1])
+    return rx + f * (1.0 - 2.0 * rx), ry
 
 
-def warp_fwd(D, su, sv, w=1.0):
-    """정방향: 그림 좌표 s → 화면 q."""
-    bu, bv = _bern(su), _bern(sv)
-    x, y = su, sv
-    for j in range(3):
-        for i in range(3):
-            b = bu[i] * bv[j] * w
-            k = (j * 3 + i) * 2
-            x += b * D[k]
-            y += b * D[k + 1]
-    return x, y
-
-
-def _warp_det(D, su, sv, w=1.0):
-    """정방향 야코비안 행렬식 (0 이하 = 접힘)."""
-    bu, bv = _bern(su), _bern(sv)
-    du, dv = _bern_d(su), _bern_d(sv)
-    a, b, c, d = 1.0, 0.0, 0.0, 1.0
-    for j in range(3):
-        for i in range(3):
-            k = (j * 3 + i) * 2
-            gu, gv = du[i] * bv[j] * w, bu[i] * dv[j] * w
-            a += gu * D[k]
-            b += gv * D[k]
-            c += gu * D[k + 1]
-            d += gv * D[k + 1]
-    return a * d - b * c
-
-
-def _solve9(A, b):
-    n = len(b)
-    M = [list(A[r]) + [b[r]] for r in range(n)]
-    for col in range(n):
-        piv = max(range(col, n), key=lambda r: abs(M[r][col]))
-        M[col], M[piv] = M[piv], M[col]
-        p = M[col][col]
-        if abs(p) < 1e-14:
+def pin_state(rig, st, L, f=None):
+    """지금 켜진 핀들 [(n, 제자리 t, 지금 위치 s)] (반전 반영)."""
+    if f is None:
+        f = 1.0 if float(rig.get(_p_flip(st, L), 0.0)) >= 0.5 else 0.0
+    out = []
+    for n in range(PIN_MAX):
+        if not L.pin_act[n]:
             continue
-        for r in range(n):
-            if r != col:
-                f = M[r][col] / p
-                if f:
-                    for c9 in range(col, n + 1):
-                        M[r][c9] -= f * M[col][c9]
-    return [M[r][n] / M[r][r] if abs(M[r][r]) > 1e-14 else 0.0
-            for r in range(n)]
+        tx, ty = pin_rest(L, n, f)
+        ox = float(rig.get(_p_pin(st, L, n, 0), 0.0))
+        oy = float(rig.get(_p_pin(st, L, n, 1), 0.0))
+        out.append((n, (tx, ty), (tx + ox, ty + oy)))
+    return out
 
 
-def warp_fit(D, w=1.0, n=25, pad=0.05):
-    """정방향 격자 D(18개, 세기 w)의 역방향 Q(18개)를 최소제곱으로.
-    반환 (Q, 최대 오차, 최소 행렬식). 오차·행렬식은 파츠 크기(1) 기준."""
-    A = [[0.0] * 9 for _ in range(9)]
-    bx, by = [0.0] * 9, [0.0] * 9
-    samp = []
-    mind = 1e9
-    for a9 in range(n):
-        su = -pad + (1.0 + 2.0 * pad) * a9 / (n - 1)
-        for c9 in range(n):
-            sv = -pad + (1.0 + 2.0 * pad) * c9 / (n - 1)
-            qx, qy = warp_fwd(D, su, sv, w)
-            bu, bv = _bern(qx), _bern(qy)
-            row = [bu[i] * bv[j] for j in range(3) for i in range(3)]
-            tx, ty = su - qx, sv - qy
-            for r in range(9):
-                bx[r] += row[r] * tx
-                by[r] += row[r] * ty
-                for c in range(9):
-                    A[r][c] += row[r] * row[c]
-            samp.append((row, tx, ty))
-            if 0.0 <= su <= 1.0 and 0.0 <= sv <= 1.0:
-                mind = min(mind, _warp_det(D, su, sv, w))
-    for r in range(9):
-        A[r][r] += 1e-9
-    qx, qy = _solve9(A, bx), _solve9(A, by)
-    err = 0.0
-    for row, tx, ty in samp:
-        gx = sum(r * q for r, q in zip(row, qx))
-        gy = sum(r * q for r, q in zip(row, qy))
-        err = max(err, ((gx - tx) ** 2 + (gy - ty) ** 2) ** 0.5)
-    Q = []
-    for k in range(9):
-        Q += [qx[k], qy[k]]
-    return Q, err, mind
+def pin_mls(v, src, dst):
+    """강체 MLS: 점들 v (N,2)를 src → dst 핀에 맞춰 옮김 (셰이더와 같은 식).
+    핀이 없으면 그대로."""
+    import numpy as np
+    v = np.asarray(v, dtype=float).reshape(-1, 2)
+    if not len(src):
+        return v.copy()
+    src = np.asarray(src, dtype=float).reshape(-1, 2)
+    dst = np.asarray(dst, dtype=float).reshape(-1, 2)
+    d2 = ((v[:, None, :] - src[None, :, :]) ** 2).sum(2)
+    w = 1.0 / (d2 + PIN_WEPS)
+    W = w.sum(1) + 1e-9
+    S = (w @ src) / W[:, None]
+    T = (w @ dst) / W[:, None]
+    st_dot = (src * dst).sum(1)
+    st_crs = src[:, 0] * dst[:, 1] - src[:, 1] * dst[:, 0]
+    cr = w @ st_dot - W * (S * T).sum(1) + PIN_CEPS
+    ci = w @ st_crs - W * (S[:, 0] * T[:, 1] - S[:, 1] * T[:, 0])
+    dx, dy = v[:, 0] - S[:, 0], v[:, 1] - S[:, 1]
+    cl = np.sqrt(cr * cr + ci * ci)
+    cx, cy = cr / cl, ci / cl
+    return np.stack([T[:, 0] + dx * cx - dy * cy,
+                     T[:, 1] + dx * cy + dy * cx], 1)
 
 
-def warp_table(L):
-    """단계별 역방향 표 [(w, Q)], 최대 오차, 최소 행렬식."""
-    D = [float(v) for v in L.warp_d]
-    tab, err, mind = [], 0.0, 1e9
-    for w in WARP_STEPS:
-        Q, e, d = warp_fit(D, w)
-        tab.append((w, Q))
-        err, mind = max(err, e), min(mind, d)
-    return tab, err, mind
+def _pin_node(st, L, kind, n):
+    return "EYP%s_%s_%s_%d" % (kind, st.uid, L.lid, n)
 
 
-def _warp_expr(tab, k):
-    """역방향 성분 k 의 드라이버 식 (w 에 대해 구간별 직선, w=0 이면 0)."""
-    h = 1.0 / (WARP_STEPS[1] - WARP_STEPS[0])
-    terms = []
-    for w, Q in tab:
-        c = Q[k]
-        if abs(c) < 1e-7:
-            continue
-        terms.append("%.6g*max(0,1-abs(min(max(w,0),1)-%.4g)*%.4g)"
-                     % (c, w, h))
-    return "+".join(terms) if terms else "0*w"
+def _pin_exprs(L, n):
+    """핀 n 노드 식 (변수 ox, oy = 이동량, f = 반전)."""
+    rx, ry = float(L.pin_rest[n * 2]), float(L.pin_rest[n * 2 + 1])
+    tx = "(%.7g+f*%.7g)" % (rx, 1.0 - 2.0 * rx)
+    sx = "(%.7g+f*%.7g+ox)" % (rx, 1.0 - 2.0 * rx)
+    ty = "%.7g" % ry
+    sy = "(%.7g+oy)" % ry
+    return {"sx": sx, "sy": sy, "tx": tx, "ty": ty,
+            "dot": "%s*%s+%s*%s" % (sx, tx, sy, ty),
+            "crs": "%s*%s-%s*%s" % (sx, ty, sy, tx)}
 
 
-def _warp_node_name(st, L, k):
-    return "EYWQ_%s_%s_%d" % (st.uid, L.lid, k)
-
-
-def warp_refresh(st, L):
-    """역방향 표만 다시 써서 드라이버 식 갱신 (재구성 없이). 고친 개수."""
-    tab = warp_table(L)[0]
-    pre = 'nodes["EYWQ_%s_%s_' % (st.uid, L.lid)
+def pin_refresh(st, L):
+    """핀 노드 값·식만 다시 씀 (재구성 없이). 고친 노드 수."""
     hit = 0
     for m in bpy.data.materials:
         nt = m.node_tree
-        nad = nt.animation_data if nt else None
-        if nad is None or not m.name.startswith(_MAT_PREFIX):
+        if nt is None or not m.name.startswith(_MAT_PREFIX):
             continue
-        for fc in nad.drivers:
-            dp = fc.data_path
-            if not dp.startswith(pre):
+        nad = nt.animation_data
+        drv = {}
+        if nad is not None:
+            for fc in nad.drivers:
+                drv[(fc.data_path, fc.array_index)] = fc
+        for n in range(PIN_MAX):
+            ex = _pin_exprs(L, n)
+            fn = nt.nodes.get(_pin_node(st, L, "F", n))
+            if fn is None:
                 continue
-            try:
-                k = int(dp[len(pre):].split('"', 1)[0].split(".", 1)[0])
-                ax = int(dp.split("inputs[", 1)[1].split("]", 1)[0])
-            except Exception:
-                continue
-            if not (0 <= k < 9 and ax in (0, 1)):
-                continue
-            fc.driver.expression = _warp_expr(tab, k * 2 + ax)
+            fn.outputs[0].default_value = 1.0 if L.pin_act[n] else 0.0
+            for kind, slots in (("X", (("sx", 0), ("sy", 1))),
+                                ("Y", (("tx", 0), ("dot", 2))),
+                                ("C", (("crs", None),))):
+                nd = nt.nodes.get(_pin_node(st, L, kind, n))
+                if nd is None:
+                    continue
+                for key, idx in slots:
+                    if idx is None:
+                        dp = 'nodes["%s"].outputs[0].default_value' % nd.name
+                    else:
+                        dp = 'nodes["%s"].inputs[%d].default_value' % (
+                            nd.name, idx)
+                    fc = drv.get((dp, 0))
+                    if fc is not None:
+                        fc.driver.expression = ex[key]
+                if kind == "Y":
+                    nd.inputs[1].default_value = float(L.pin_rest[n * 2 + 1])
             hit += 1
         if hit:
             try:
@@ -3190,100 +3164,66 @@ def warp_refresh(st, L):
     return hit
 
 
-def _warp_d_cb(self, context):
-    """격자 값을 바꾸면 드라이버 식만 갱신 (노드 그대로)."""
+def _pin_on_cb(self, context):
     st = _owner(self)
-    if st is None or not warp_on(self):
-        return
     try:
-        if warp_refresh(st, self) == 0 and st.built:
-            _rebuild_cb(self, context)
+        rig = context.scene.fskr.rig
+        if st is not None and rig is not None and self.pin_on:
+            for p in _pin_props(st, self):
+                _ensure_float(rig, p, 0.0, -1.0e4, 1.0e4, (-1.0, 1.0))
     except Exception as e:
-        print("FSKR warp refresh:", e)
-    try:
-        rig = context.scene.fskr.rig
-        if rig is not None:
-            rig.update_tag()
-    except Exception:
-        pass
-    _redraw_ui(context)
-
-
-def _warp_on_cb(self, context):
-    st = _owner(self)
-    try:
-        rig = context.scene.fskr.rig
-        if st is not None and rig is not None and self.warp_on:
-            _ensure_float(rig, _p_warp(st, self), 0.0, 0.0, 1.0)
-    except Exception:
-        pass
+        print("FSKR pin on:", e)
     _rebuild_cb(self, context)
 
 
-_WARP_Q = {}
+def pin_clear_keys(rig, st, L, n):
+    """핀 n의 이동량을 0으로, 키도 지움 (같은 칸을 다시 쓸 때 옛 키 방지)."""
+    for ax in (0, 1):
+        p = _p_pin(st, L, n, ax)
+        try:
+            frs = sorted({kp.co[0] for fc in AT._fcurves_for(
+                rig, '["%s"]' % p) for kp in fc.keyframe_points})
+        except Exception:
+            frs = []
+        for fr in frs:   # 마지막 키를 지우면 채널도 같이 사라짐
+            try:
+                rig.keyframe_delete(data_path='["%s"]' % p, frame=fr)
+            except Exception:
+                pass
+        if p in rig.keys():
+            rig[p] = 0.0
 
 
-def warp_quality(L):
-    """(최대 오차, 최소 행렬식) — 값이 같으면 캐시."""
-    key = tuple(round(float(v), 5) for v in L.warp_d)
-    r = _WARP_Q.get(key)
-    if r is None:
-        if len(_WARP_Q) > 64:
-            _WARP_Q.clear()
-        _, e, d = warp_table(L)
-        r = _WARP_Q[key] = (e, d)
-    return r
-
-
-def draw_warp(layout, s, st, L):
-    """모양 휘기 (실험) 상자: 켜기, 세기(키 가능), 격자 점 9개."""
+def draw_pins(layout, s, st, L):
+    """퍼펫 핀 (실험) 상자."""
     rig = s.rig
-    if rig is None or L.kind == 'MOUTH' and _layer_atlas(s, L) is None:
+    if rig is None:
         return
     ast, aL = _anim_source(s, st, L)
     b = layout.box().column(align=True)
     r = b.row(align=True)
-    r.prop(aL, "show_warp", text="", emboss=False,
-           icon='TRIA_DOWN' if aL.show_warp else 'TRIA_RIGHT')
-    r.prop(aL, "warp_on", text=_tr("모양 휘기 (실험)"), icon='MOD_LATTICE')
-    if not aL.show_warp or not aL.warp_on:
-        return
+    r.prop(aL, "pin_on", text=_tr("퍼펫 핀 (실험)"), icon='PINNED')
     if aL is not L:
         h = b.row()
         h.active = False
         h.label(text=_tr("따라가는 파츠") + ": " + ast.name + " / "
                 + aL.name, icon='LINKED')
-    pw = _p_warp(ast, aL)
-    if pw in rig.keys():
-        r = b.row(align=True)
-        r.prop(rig, '["%s"]' % pw, text=_tr("휘는 정도"), slider=True)
-    else:
-        op = b.operator("fskr.eye_build", text=_tr("머티리얼 다시 만들기"),
-                        icon='FILE_REFRESH')
-        op.uid = st.uid
-    b.separator(factor=0.4)
-    h = b.row()
-    h.active = False
-    h.label(text=_tr("격자 점 이동량 (휘는 정도 1일 때, 파츠 크기 = 1)"))
-    for j, nm in ((2, "위"), (1, "가운데"), (0, "아래")):
-        r = b.row(align=True)
-        r.label(text=_tr(nm))
-        for i in range(3):
-            c = r.column(align=True)
-            k = (j * 3 + i) * 2
-            c.prop(aL, "warp_d", index=k, text="X")
-            c.prop(aL, "warp_d", index=k + 1, text="Y")
-    err, mind = warp_quality(aL)
     r = b.row()
-    r.active = False
-    r.label(text=_tr("역변환 오차") + " %.2f%%" % (err * 100.0),
-            icon='CHECKMARK' if err < 0.005 else 'INFO')
-    if mind <= 0.0:
-        b.label(text=_tr("격자가 접혔습니다: 점을 덜 움직이세요"),
-                icon='ERROR')
-    elif err >= 0.02:
-        b.label(text=_tr("너무 많이 휘어 그림이 어긋날 수 있습니다"),
-                icon='ERROR')
+    r.scale_y = 1.4
+    op = r.operator("fskr.pin_tool", icon='PINNED',
+                    text=_tr("퍼펫 핀 도구 (뷰포트)"))
+    op.uid, op.lid = ast.uid, aL.lid
+    if not aL.pin_on:
+        return
+    n = sum(1 for v in aL.pin_act if v)
+    r = b.row(align=True)
+    r.label(text=_tr("핀") + " %d / %d" % (n, PIN_MAX))
+    op = r.operator("fskr.pin_key", text="", icon='KEY_HLT')
+    op.uid, op.lid = ast.uid, aL.lid
+    op = r.operator("fskr.pin_reset", text="", icon='LOOP_BACK')
+    op.uid, op.lid, op.what = ast.uid, aL.lid, 'POSE'
+    op = r.operator("fskr.pin_reset", text="", icon='TRASH')
+    op.uid, op.lid, op.what = ast.uid, aL.lid, 'ALL'
 
 
 def _mirror_all(s, st):
@@ -4438,47 +4378,116 @@ def _eye_mat(s, st, over=False):
             sm.inputs["Scale"].default_value = (-1.0, 1.0, 1.0)
             link(luv, sm.inputs["Vector"])
             srcs.append(sm.outputs[0])
-        # 모양 휘기: 역방향 제어점 9개 (복사본들이 같이 씀)
-        wq = None
-        if warp_on(aL):
-            pw = _p_warp(ast, aL)
-            _ensure_float(rig, pw, 0.0, 0.0, 1.0)
-            wtab = warp_table(aL)[0]
-            wq = []
-            for k9 in range(9):
-                cq = node('ShaderNodeCombineXYZ', -1500, y + 420 - 25 * k9)
-                cq.name = _warp_node_name(ast, aL, k9)
-                cq.label = "%s: warp %d" % (L.name, k9)
+        # 퍼펫 핀: 핀마다 노드 4개 (복사본들이 같이 씀)
+        #   X = (지금 위치 s.x, s.y, 0)   Y = (제자리 t.x, t.y, s·t)
+        #   C = s×t,  F = 켜짐(0/1)
+        pins = None
+        if pin_on(aL):
+            pv_ = [("f", rig, '["%s"]' % _p_flip(ast, aL))]
+            pins = []
+            for n9 in range(PIN_MAX):
                 for ax in (0, 1):
-                    _drv_vars(cq.inputs[ax], None,
-                              _warp_expr(wtab, k9 * 2 + ax),
-                              [("w", rig, '["%s"]' % pw)])
-                wq.append(cq.outputs[0])
+                    _ensure_float(rig, _p_pin(ast, aL, n9, ax), 0.0,
+                                  -1.0e4, 1.0e4, (-1.0, 1.0))
+                vv = pv_ + [("ox", rig, '["%s"]' % _p_pin(ast, aL, n9, 0)),
+                            ("oy", rig, '["%s"]' % _p_pin(ast, aL, n9, 1))]
+                ex = _pin_exprs(aL, n9)
+                yp = y + 520 - 90 * n9
+                nx = node('ShaderNodeCombineXYZ', -1560, yp)
+                nx.name = _pin_node(ast, aL, "X", n9)
+                nx.label = "%s: pin %d now" % (L.name, n9 + 1)
+                _drv_vars(nx.inputs[0], None, ex["sx"], vv)
+                _drv_vars(nx.inputs[1], None, ex["sy"], vv)
+                ny = node('ShaderNodeCombineXYZ', -1560, yp - 25)
+                ny.name = _pin_node(ast, aL, "Y", n9)
+                ny.label = "%s: pin %d rest" % (L.name, n9 + 1)
+                _drv_vars(ny.inputs[0], None, ex["tx"], pv_)
+                ny.inputs[1].default_value = float(aL.pin_rest[n9 * 2 + 1])
+                _drv_vars(ny.inputs[2], None, ex["dot"], vv)
+                nc = node('ShaderNodeValue', -1560, yp - 50)
+                nc.name = _pin_node(ast, aL, "C", n9)
+                nc.label = "%s: pin %d cross" % (L.name, n9 + 1)
+                _drv_vars(nc.outputs[0], None, ex["crs"], vv)
+                nf = node('ShaderNodeValue', -1560, yp - 70)
+                nf.name = _pin_node(ast, aL, "F", n9)
+                nf.label = "%s: pin %d on" % (L.name, n9 + 1)
+                nf.outputs[0].default_value = 1.0 if aL.pin_act[n9] else 0.0
+                pins.append((nx.outputs[0], ny.outputs[0], nc.outputs[0],
+                             nf.outputs[0]))
 
-        def warp_apply(q9, yy):
-            """q' = q + Σ Bi(u)·Bj(v)·Qij  (2차 베지어, 칸 선택 없음)."""
-            sw = node('ShaderNodeSeparateXYZ', -1420, yy + 120)
-            link(q9, sw.inputs[0])
-            bs = []
-            for ax in (0, 1):
-                t9 = sw.outputs[ax]
-                yb = yy + 160 + 60 * ax
-                om = math('SUBTRACT', 1.0, t9, -1400, yb)
-                bs.append((math('MULTIPLY', om, om, -1390, yb),
-                           math('MULTIPLY',
-                                math('MULTIPLY', t9, om, -1390, yb - 10),
-                                2.0, -1380, yb - 10),
-                           math('MULTIPLY', t9, t9, -1390, yb - 20)))
-            bu, bv = bs
-            g9 = None
-            for j9 in range(3):
-                r9 = None
-                for i9 in range(3):
-                    t = vscale(wq[j9 * 3 + i9], bu[i9], -1370, yy + 140)
-                    r9 = t if r9 is None else vadd(r9, t, -1360, yy + 140)
-                t = vscale(r9, bv[j9], -1350, yy + 140)
-                g9 = t if g9 is None else vadd(g9, t, -1340, yy + 140)
-            return vadd(q9, g9, -1330, yy + 120)
+        def vmath(op, a9, b9, x, yv, out=0):
+            n9 = node('ShaderNodeVectorMath', x, yv, operation=op)
+            link(a9, n9.inputs[0])
+            if b9 is not None:
+                link(b9, n9.inputs[1])
+            return n9.outputs[out]
+
+        def pin_apply(q9, yy):
+            """화면 점 q → 그림 점 (강체 MLS, 지금 핀 → 제자리)."""
+            sx9 = sy9 = sc9 = sw9 = None
+            for i9, (px9, py9, pc9, pf9) in enumerate(pins):
+                xx = -1500 + 12 * i9
+                d9 = vmath('DISTANCE', q9, px9, xx, yy + 200, out=1)
+                w9 = math('DIVIDE', 1.0,
+                          math('ADD', math('MULTIPLY', d9, d9, xx, yy + 190),
+                               PIN_WEPS, xx, yy + 185), xx, yy + 180)
+                w9 = math('MULTIPLY', w9, pf9, xx, yy + 175)
+                a9 = vscale(px9, w9, xx, yy + 170)
+                b9 = vscale(py9, w9, xx, yy + 165)
+                c9 = math('MULTIPLY', pc9, w9, xx, yy + 160)
+                sx9 = a9 if sx9 is None else vadd(sx9, a9, xx, yy + 150)
+                sy9 = b9 if sy9 is None else vadd(sy9, b9, xx, yy + 145)
+                sc9 = c9 if sc9 is None else math('ADD', sc9, c9, xx,
+                                                   yy + 140)
+                sw9 = w9 if sw9 is None else math('ADD', sw9, w9, xx,
+                                                   yy + 135)
+            xx = -1400
+            W9 = math('ADD', sw9, 1e-9, xx, yy + 130)
+            iW = math('DIVIDE', 1.0, W9, xx, yy + 125)
+            S9 = vscale(sx9, iW, xx, yy + 120)      # (Sx, Sy, 0)
+            T9 = vscale(sy9, iW, xx, yy + 115)      # (Tx, Ty, Σw s·t / W)
+            tz = node('ShaderNodeSeparateXYZ', xx + 10, yy + 110)
+            link(T9, tz.inputs[0])
+            dotST = vmath('DOT_PRODUCT', S9, T9, xx + 10, yy + 105, out=1)
+            cr = math('ADD', math('MULTIPLY',
+                                  math('SUBTRACT', tz.outputs[2], dotST,
+                                       xx + 20, yy + 100),
+                                  W9, xx + 25, yy + 100), PIN_CEPS,
+                      xx + 30, yy + 100)
+            crs = node('ShaderNodeSeparateXYZ', xx + 20, yy + 90)
+            link(vmath('CROSS_PRODUCT', S9, T9, xx + 15, yy + 90),
+                 crs.inputs[0])
+            ci = math('SUBTRACT', sc9,
+                      math('MULTIPLY', crs.outputs[2], W9, xx + 25, yy + 85),
+                      xx + 30, yy + 85)
+            dv = node('ShaderNodeSeparateXYZ', xx + 30, yy + 75)
+            link(vmath('SUBTRACT', q9, S9, xx + 25, yy + 75), dv.inputs[0])
+            dx9, dy9 = dv.outputs[0], dv.outputs[1]
+            # 강체: f(v) = T + (v-S)·c/|c|. 제자리일 때 정확히 q 가 되도록
+            #   q + [(T-S) + (회전한 d - d)] 로 계산 (반올림 차이 없음)
+            cl = math('SQRT', math('ADD',
+                                   math('MULTIPLY', cr, cr, xx + 35, yy + 70),
+                                   math('MULTIPLY', ci, ci, xx + 35, yy + 65),
+                                   xx + 40, yy + 70), 0.0, xx + 45, yy + 70)
+            cnx = math('DIVIDE', cr, cl, xx + 50, yy + 70)
+            cny = math('DIVIDE', ci, cl, xx + 50, yy + 65)
+            rx9 = math('SUBTRACT', math('MULTIPLY', dx9, cnx, xx + 55, yy + 60),
+                       math('MULTIPLY', dy9, cny, xx + 55, yy + 55),
+                       xx + 60, yy + 60)
+            ry9 = math('ADD', math('MULTIPLY', dx9, cny, xx + 55, yy + 50),
+                       math('MULTIPLY', dy9, cnx, xx + 55, yy + 45),
+                       xx + 60, yy + 50)
+            ss = node('ShaderNodeSeparateXYZ', xx + 30, yy + 40)
+            link(S9, ss.inputs[0])
+            o9 = node('ShaderNodeCombineXYZ', xx + 80, yy + 50)
+            for ax, (t9, s9, r9, d9) in enumerate(
+                    ((tz.outputs[0], ss.outputs[0], rx9, dx9),
+                     (tz.outputs[1], ss.outputs[1], ry9, dy9))):
+                link(math('ADD',
+                          math('SUBTRACT', t9, s9, xx + 65, yy + 40 - ax * 10),
+                          math('SUBTRACT', r9, d9, xx + 65, yy + 35 - ax * 10),
+                          xx + 70, yy + 40 - ax * 10), o9.inputs[ax])
+            return vadd(q9, o9.outputs[0], xx + 90, yy + 50)
 
         coords = []
         for ci, src_uv in enumerate(srcs):
@@ -4502,8 +4511,8 @@ def _eye_mat(s, st, over=False):
                 xbind(xf9.inputs["Location"].driver_add(
                     "default_value", 1), 'XFY')
                 out9 = xf9.outputs[0]
-            if wq is not None:   # 크롭·반전 전, 화면 기준 파츠 공간에서
-                out9 = warp_apply(out9, yy)
+            if pins is not None:   # 크롭·반전 전, 화면 기준 파츠 공간에서
+                out9 = pin_apply(out9, yy)
             coords.append(out9)
         # 칸 선택 (리그 프로퍼티). 입 레이어는 입 시트의 조회표를 그대로 씀
         if ait is None:
@@ -7898,7 +7907,7 @@ class FSKR_PT_eyes(bpy.types.Panel):
         r = db.row(align=True)
         r.prop(L, "flip_x", toggle=True, icon='MOD_MIRROR')
         r.prop(L, "sym", toggle=True, icon='MOD_MIRROR')
-        draw_warp(db, s, st, L)
+        draw_pins(db, s, st, L)
         # 색조/채도/명도
         hb = db.column(align=True)
         hr = hb.row(align=True)

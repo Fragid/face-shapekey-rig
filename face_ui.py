@@ -1459,8 +1459,9 @@ def preset_apply(s, st, pr, groups, key, frame=None):
             d = dict(d)
             d["vis"] = 1.0
         for k, p, dv in zip(EY.ANIM_KEYS, props, EY.ANIM_DEFAULTS):
-            if k not in d and k in ("ct", "cb", "cl", "cr", "warp"):
-                # 크롭·휘기가 없던 때 저장한 프리셋 = 크롭·휘기 없음(0)
+            if k not in d and (k in ("ct", "cb", "cl", "cr")
+                               or k.startswith("pin")):
+                # 크롭·핀이 없던 때 저장한 프리셋 = 크롭 없음·핀 제자리(0)
                 d = dict(d)
                 d[k] = dv
             if k in d:
@@ -3079,7 +3080,7 @@ def draw_part_props(col, context, s, st, L, rig, mouth_panel=False):
                      if sd9 == "L" else
                      _tr("원본 = 화면 오른쪽, 복사본 = 화면 왼쪽"),
                      icon='INFO')
-    EY.draw_warp(b, s, st, L)
+    EY.draw_pins(b, s, st, L)
     # 키: 이 파츠의 지금 값 전부 (칸·배치·불투명도·크롭)
     b.separator(factor=0.5)
     kb = b.row(align=True)
@@ -4579,5 +4580,502 @@ class FSKR_OT_part_transform_key(_PartTransformBase, bpy.types.Operator):
                 and any(ob.name == e.target for e in s.eyes))
 
 
+def _pin_ctx(op9, context):
+    s = context.scene.fskr
+    st = EY._find(s, op9.uid)
+    L = EY._layer(st, op9.lid) if st else None
+    return s, st, L
+
+
+class FSKR_OT_pin_reset(bpy.types.Operator):
+    bl_idname = "fskr.pin_reset"
+    bl_label = "퍼펫 핀 초기화"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    uid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    lid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    what: bpy.props.EnumProperty(
+        items=(('POSE', "제자리로", ""), ('ALL', "핀 모두 삭제", "")),
+        default='POSE', options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def description(cls, context, props):
+        if props.what == 'ALL':
+            return _tr("핀을 모두 지웁니다 (핀 키도 같이 지움)")
+        return _tr("지금 프레임의 핀을 모두 제자리로 (키는 그대로)")
+
+    def execute(self, context):
+        s, st, L = _pin_ctx(self, context)
+        rig = s.rig
+        if L is None or rig is None:
+            return {'CANCELLED'}
+        for n in range(EY.PIN_MAX):
+            if self.what == 'ALL':
+                EY.pin_clear_keys(rig, st, L, n)
+                L.pin_act[n] = False
+            else:
+                for ax in (0, 1):
+                    p = EY._p_pin(st, L, n, ax)
+                    if p in rig.keys():
+                        rig[p] = 0.0
+        EY.pin_refresh(st, L)
+        rig.update_tag()
+        _redraw_ui(context)
+        return {'FINISHED'}
+
+
+class FSKR_OT_pin_key(bpy.types.Operator):
+    bl_idname = "fskr.pin_key"
+    bl_label = "핀 키 넣기"
+    bl_description = "켜진 핀들의 지금 위치를 현재 프레임에 키로 넣습니다"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    uid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    lid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    def execute(self, context):
+        s, st, L = _pin_ctx(self, context)
+        if L is None or s.rig is None:
+            return {'CANCELLED'}
+        n = _pin_key(s, st, L, [i for i in range(EY.PIN_MAX)
+                                if L.pin_act[i]])
+        self.report({'INFO'}, _tr("키 삽입: ") + "%s (%d)" % (L.name, n))
+        _redraw_ui(context)
+        return {'FINISHED'}
+
+
+def _pin_key(s, st, L, idx):
+    only = set()
+    for n in idx:
+        only |= {EY._p_pin(st, L, n, 0), EY._p_pin(st, L, n, 1)}
+    if not only:
+        return 0
+    return EY.key_layer(s, st, L, only=only)
+
+
+class FSKR_OT_pin_tool(_PartTransformBase, bpy.types.Operator):
+    """애프터 이펙트 퍼펫 핀처럼: 그림 클릭 = 핀 추가, 핀 드래그 = 휘기."""
+    bl_idname = "fskr.pin_tool"
+    bl_label = "퍼펫 핀 도구"
+    bl_description = ("그림을 클릭해 핀을 꽂고, 핀을 끌어서 그림을 휩니다 "
+                      "(애프터 이펙트 퍼펫 핀처럼). 프레임을 옮겨 가며 핀을 "
+                      "움직이면 애니메이션이 됩니다. Enter·Esc 끝내기")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    uid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    lid: bpy.props.StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def poll(cls, context):
+        s = context.scene.fskr
+        return s.rig is not None and len(s.eyes) > 0
+
+    # ----- 준비 -----
+    def _invoke(self, context, event):
+        s, st, L = self._ctx(context)
+        if L is None or s.rig is None:
+            return {'CANCELLED'}
+        ast, aL = EY._anim_source(s, st, L)
+        if not aL.pin_on:
+            aL.pin_on = True        # 머티리얼에 핀 노드 추가 (한 번)
+        r = _PartTransformBase._invoke(self, context, event)
+        if 'RUNNING_MODAL' not in r:
+            return r
+        self.sel = set()
+        self.phist, self.predo = [], []
+        self.drag = None
+        self.moved = False
+        return r
+
+    def _AL(self):
+        s = self._s()
+        return EY._anim_source(s, self._st(), self._L())
+
+    def _flip(self):
+        ast, aL = self._AL()
+        return 1.0 if float(self._s().rig.get(EY._p_flip(ast, aL), 0.0)) \
+            >= 0.5 else 0.0
+
+    def _snap(self):
+        """되돌리기용: (제자리, 켜짐, 이동량)."""
+        ast, aL = self._AL()
+        rig = self._s().rig
+        return (tuple(aL.pin_rest), tuple(aL.pin_act),
+                tuple(float(rig.get(p, 0.0))
+                      for p in EY._pin_props(ast, aL)))
+
+    def _restore(self, sn):
+        ast, aL = self._AL()
+        rig = self._s().rig
+        aL.pin_rest, aL.pin_act = sn[0], sn[1]
+        for p, v in zip(EY._pin_props(ast, aL), sn[2]):
+            rig[p] = v
+        EY.pin_refresh(ast, aL)
+        rig.update_tag()
+
+    def _ppush(self):
+        self.phist.append(self._snap())
+        if len(self.phist) > 200:
+            del self.phist[0]
+        self.predo = []
+
+    def _q2s(self, q, J):
+        return self._scr(self._q2uv((float(q[0]), float(q[1]))), J)
+
+    def _s2q(self, mp, J):
+        return self._uv2q(self._uv(mp, J))
+
+    def _pins_scr(self, J):
+        ast, aL = self._AL()
+        out = {}
+        for n, t, sp in EY.pin_state(self._s().rig, ast, aL, self._flip()):
+            out[n] = self._q2s(sp, J)
+        return out
+
+    # ----- 그리기 -----
+    def draw_px(self, context):
+        import gpu
+        import blf
+        import math as m
+        import numpy as np
+        from gpu_extras.batch import batch_for_shader
+        if context.area is None or context.area != self.area:
+            return
+        if self._L() is None:
+            return
+        try:
+            self.cur = self._get()   # 프레임을 옮기면 파츠 배치도 바뀜
+        except Exception:
+            pass
+        J = self._jac(context)
+        if J is None:
+            return
+        self.J = J
+        ast, aL = self._AL()
+        f = self._flip()
+        ps = EY.pin_state(self._s().rig, ast, aL, f)
+        src = [t for _n, t, _s in ps]
+        dst = [sp for _n, _t, sp in ps]
+        # 그림 영역 위에 휜 격자 (정방향: 제자리 → 지금 핀)
+        bb = None
+        try:
+            bb = EY.cell_bbox(self._s(), ast, aL)
+        except Exception:
+            bb = None
+        u0, u1, v0, v1 = bb if bb else (0.0, 1.0, 0.0, 1.0)
+        if f >= 0.5:
+            u0, u1 = 1.0 - u1, 1.0 - u0
+        xs = np.linspace(0.0, 1.0, 21)
+        lines = []
+        for a in np.linspace(0.0, 1.0, 7):
+            for horiz in (True, False):
+                tu = xs if horiz else np.full_like(xs, a)
+                tv = np.full_like(xs, a) if horiz else xs
+                pts = np.stack([u0 + tu * (u1 - u0), v0 + tv * (v1 - v0)], 1)
+                pts = EY.pin_mls(pts, src, dst)
+                sp = [self._q2s(p, J) for p in pts]
+                for p0, p1 in zip(sp[:-1], sp[1:]):
+                    lines += [tuple(p0), tuple(p1)]
+        sh = gpu.shader.from_builtin('UNIFORM_COLOR')
+        gpu.state.blend_set('ALPHA')
+        sh.bind()
+        gpu.state.line_width_set(1.0)
+        bl = batch_for_shader(sh, 'LINES', {"pos": lines})
+        sh.uniform_float("color", (1.0, 0.85, 0.3, 0.35))
+        bl.draw(sh)
+        # 핀
+        hs = self._pins_scr(J)
+        self.hs = hs
+        for n, p in hs.items():
+            sel = n in self.sel
+            r = 8.0 if sel else 6.5
+            tris = []
+            for i in range(16):
+                a1, a2 = i / 16 * 2 * m.pi, (i + 1) / 16 * 2 * m.pi
+                tris += [(p.x, p.y), (p.x + r * m.cos(a1), p.y + r * m.sin(a1)),
+                         (p.x + r * m.cos(a2), p.y + r * m.sin(a2))]
+            bt = batch_for_shader(sh, 'TRIS', {"pos": tris})
+            sh.uniform_float("color", (0.1, 0.1, 0.1, 0.9))
+            bt.draw(sh)
+            tris2 = []
+            r2 = r - 2.0
+            for i in range(16):
+                a1, a2 = i / 16 * 2 * m.pi, (i + 1) / 16 * 2 * m.pi
+                tris2 += [(p.x, p.y),
+                          (p.x + r2 * m.cos(a1), p.y + r2 * m.sin(a1)),
+                          (p.x + r2 * m.cos(a2), p.y + r2 * m.sin(a2))]
+            bt2 = batch_for_shader(sh, 'TRIS', {"pos": tris2})
+            sh.uniform_float("color", (1.0, 0.55, 0.1, 1.0) if sel
+                             else (1.0, 0.85, 0.2, 1.0))
+            bt2.draw(sh)
+        # 버튼
+        try:
+            ui9 = float(context.preferences.system.ui_scale)
+        except Exception:
+            ui9 = 1.0
+        bot = self._bottom_inset()
+        labs = (("ok", _tr("✓ 끝내기")), ("key", _tr("핀 키 넣기")),
+                ("del", _tr("고른 핀 삭제")), ("rst", _tr("제자리로")))
+        bw9 = 110 * ui9
+        tot = bw9 * len(labs) + 6 * (len(labs) - 1)
+        x0 = (self.reg.width - tot) / 2
+        by = bot + 112 * ui9
+        self.btns = {}
+        for k, _lab in labs:
+            self.btns[k] = (x0, by - 30 * ui9, x0 + bw9, by)
+            x0 += bw9 + 6
+        for k, (a0, b0, a1, b1) in self.btns.items():
+            bq = batch_for_shader(sh, 'TRIS', {"pos": [
+                (a0, b0), (a1, b0), (a1, b1), (a0, b0), (a1, b1), (a0, b1)]})
+            sh.uniform_float("color", (0.35, 0.35, 0.38, 0.95)
+                             if self.hover == k else (0.2, 0.2, 0.22, 0.9))
+            bq.draw(sh)
+        gpu.state.blend_set('NONE')
+        fid = 0
+        blf.size(fid, 13 * ui9)
+        for k, lab in labs:
+            a0, b0, a1, b1 = self.btns[k]
+            w, h = blf.dimensions(fid, lab)
+            blf.color(fid, 1, 1, 1, 1)
+            blf.position(fid, (a0 + a1 - w) / 2, (b0 + b1 - h) / 2 + 2, 0)
+            blf.draw(fid, lab)
+        # 핀 번호
+        blf.size(fid, 11 * ui9)
+        for n, p in hs.items():
+            blf.color(fid, 1, 1, 1, 1)
+            blf.position(fid, p.x + 9, p.y + 7, 0)
+            blf.draw(fid, str(n + 1))
+        # 도움말
+        st = self._st()
+        ak = bool(getattr(st, "autokey", False))
+        tips = (_tr("그림 클릭 = 핀 꽂기   ·   핀 드래그 = 휘기   ·   "
+                    "Shift 클릭 = 핀 여러 개   ·   X·Delete = 고른 핀 삭제"),
+                _tr("I = 핀 키   ·   ←→ 프레임 이동   ·   Ctrl+Z 되돌리기   ·   "
+                    "Enter·Esc 끝내기") + "   ·   " +
+                (_tr("자동 키 켜짐") if ak else _tr("자동 키 꺼짐")))
+        fs = 15 * ui9
+        blf.size(fid, fs)
+        lh = fs * 1.55
+        pad = 10 * ui9
+        ws = [blf.dimensions(fid, t9)[0] for t9 in tips]
+        bw = max(ws) + pad * 2
+        bh = lh * len(tips) + pad * 1.2
+        bx0 = (self.reg.width - bw) / 2
+        by0 = bot + 8 * ui9
+        gpu.state.blend_set('ALPHA')
+        bg = batch_for_shader(sh, 'TRIS', {"pos": [
+            (bx0, by0), (bx0 + bw, by0), (bx0 + bw, by0 + bh),
+            (bx0, by0), (bx0 + bw, by0 + bh), (bx0, by0 + bh)]})
+        sh.bind()
+        sh.uniform_float("color", (0.06, 0.06, 0.08, 0.72))
+        bg.draw(sh)
+        gpu.state.blend_set('NONE')
+        for i, t9 in enumerate(reversed(tips)):
+            w = ws[len(tips) - 1 - i]
+            blf.color(fid, 1, 1, 1, 1)
+            blf.position(fid, (self.reg.width - w) / 2,
+                         by0 + pad * 0.8 + i * lh, 0)
+            blf.draw(fid, t9)
+
+    # ----- 편집 -----
+    def _pick_p(self, mp):
+        for k, (a0, b0, a1, b1) in (self.btns or {}).items():
+            if a0 <= mp.x <= a1 and b0 <= mp.y <= b1:
+                return "btn_" + k
+        best, bd = None, 12.0
+        for n, p in (getattr(self, "hs", None) or {}).items():
+            d = (p - mp).length
+            if d < bd:
+                best, bd = n, d
+        return best
+
+    def _add_pin(self, mp):
+        """클릭한 화면 점에 핀: 제자리 = 지금 변형을 되돌린 그림 위치."""
+        ast, aL = self._AL()
+        rig = self._s().rig
+        free = [n for n in range(EY.PIN_MAX) if not aL.pin_act[n]]
+        if not free:
+            self.report({'WARNING'}, _tr("핀은 파츠마다 %d개까지입니다")
+                        % EY.PIN_MAX)
+            return None
+        n = free[0]
+        f = self._flip()
+        q = self._s2q(mp, self.J)
+        ps = EY.pin_state(rig, ast, aL, f)
+        t = EY.pin_mls([(q.x, q.y)], [sp for _n, _t, sp in ps],
+                       [tt for _n, tt, _s in ps])[0]
+        rx = float(t[0]) if f < 0.5 else 1.0 - float(t[0])
+        EY.pin_clear_keys(rig, ast, aL, n)
+        r = list(aL.pin_rest)
+        r[n * 2], r[n * 2 + 1] = rx, float(t[1])
+        aL.pin_rest = r
+        a = list(aL.pin_act)
+        a[n] = True
+        aL.pin_act = a
+        rig[EY._p_pin(ast, aL, n, 0)] = q.x - float(t[0])
+        rig[EY._p_pin(ast, aL, n, 1)] = q.y - float(t[1])
+        EY.pin_refresh(ast, aL)
+        rig.update_tag()
+        return n
+
+    def _del_sel(self):
+        if not self.sel:
+            return
+        self._ppush()
+        ast, aL = self._AL()
+        rig = self._s().rig
+        a = list(aL.pin_act)
+        for n in self.sel:
+            EY.pin_clear_keys(rig, ast, aL, n)
+            a[n] = False
+        aL.pin_act = a
+        self.sel = set()
+        EY.pin_refresh(ast, aL)
+        rig.update_tag()
+
+    def _drag_to(self, mp):
+        J, q0, offs = self.drag
+        q = self._s2q(mp, J)
+        dq = (q.x - q0.x, q.y - q0.y)
+        ast, aL = self._AL()
+        rig = self._s().rig
+        for n, (ox, oy) in offs.items():
+            rig[EY._p_pin(ast, aL, n, 0)] = ox + dq[0]
+            rig[EY._p_pin(ast, aL, n, 1)] = oy + dq[1]
+        rig.update_tag()
+        self.moved = True
+
+    def _autokey(self, idx):
+        st = self._st()
+        if not getattr(st, "autokey", False) or not idx:
+            return
+        ast, aL = self._AL()
+        try:
+            _pin_key(self._s(), ast, aL, list(idx))
+        except Exception as e:
+            print("FSKR pin autokey:", e)
+
+    def _key_all(self):
+        ast, aL = self._AL()
+        n = _pin_key(self._s(), ast, aL,
+                     [i for i in range(EY.PIN_MAX) if aL.pin_act[i]])
+        self.report({'INFO'}, _tr("키 삽입: ") + "%s (%d)" % (aL.name, n))
+
+    def _end(self, context, ok=True):
+        self._cleanup()
+        _redraw_ui(context)
+        return {'FINISHED'}
+
+    def modal(self, context, ev):
+        if _XF.get("abort") or self._L() is None:
+            self._cleanup()
+            return {'CANCELLED'}
+        try:
+            self.area.tag_redraw()
+            persp = self.area.spaces.active.region_3d.view_perspective
+        except Exception:
+            return self._end(context)
+        if persp != 'ORTHO' and not self.drag:
+            self.report({'INFO'}, _tr("원근 뷰가 되어 퍼펫 핀 도구를 "
+                                      "끝냈습니다"))
+            return self._end(context)
+        if ev.type == 'Z' and (ev.ctrl or ev.oskey) and ev.value == 'PRESS':
+            if not self.drag:
+                if ev.shift:
+                    if self.predo:
+                        self.phist.append(self._snap())
+                        self._restore(self.predo.pop())
+                elif self.phist:
+                    self.predo.append(self._snap())
+                    self._restore(self.phist.pop())
+            return {'RUNNING_MODAL'}
+        if ev.type in ('X', 'DEL') and ev.value == 'PRESS' and not self.drag:
+            self._del_sel()
+            return {'RUNNING_MODAL'}
+        if ev.type == 'I' and ev.value == 'PRESS' and not self.drag:
+            self._key_all()
+            return {'RUNNING_MODAL'}
+        if ev.type in ('LEFT_ARROW', 'RIGHT_ARROW', 'UP_ARROW', 'DOWN_ARROW',
+                       'SPACE') and not self.drag:
+            return {'PASS_THROUGH'}     # 프레임 이동·재생
+        mp = self._mp(ev)
+        inside = 0 <= mp.x <= self.reg.width and 0 <= mp.y <= self.reg.height
+        if ev.type in ('ESC', 'RET', 'NUMPAD_ENTER') and ev.value == 'PRESS':
+            return self._end(context)
+        if ev.type == 'RIGHTMOUSE' and ev.value == 'PRESS':
+            return self._end(context)
+        if ev.type == 'MOUSEMOVE':
+            if self.drag:
+                self._drag_to(mp)
+                return {'RUNNING_MODAL'}
+            k = self._pick_p(mp) if inside else None
+            self.hover = k[4:] if isinstance(k, str) and \
+                k.startswith("btn_") else None
+            return {'PASS_THROUGH'}
+        if ev.type == 'LEFTMOUSE':
+            if ev.value == 'PRESS' and inside:
+                k = self._pick_p(mp)
+                if k == "btn_ok":
+                    return self._end(context)
+                if k == "btn_key":
+                    self._key_all()
+                    return {'RUNNING_MODAL'}
+                if k == "btn_del":
+                    self._del_sel()
+                    return {'RUNNING_MODAL'}
+                if k == "btn_rst":
+                    self._ppush()
+                    ast, aL = self._AL()
+                    rig = self._s().rig
+                    for p in EY._pin_props(ast, aL):
+                        rig[p] = 0.0
+                    rig.update_tag()
+                    self._autokey([i for i in range(EY.PIN_MAX)
+                                   if aL.pin_act[i]])
+                    return {'RUNNING_MODAL'}
+                if self.J is None:
+                    return {'RUNNING_MODAL'}
+                self._ppush()
+                if k is None:
+                    n = self._add_pin(mp)
+                    if n is None:
+                        self.phist.pop()
+                        return {'RUNNING_MODAL'}
+                    self.sel = {n}
+                    self._autokey([n])
+                    k = n
+                elif ev.shift:
+                    if k in self.sel:
+                        self.sel.discard(k)
+                        return {'RUNNING_MODAL'}
+                    self.sel.add(k)
+                elif k not in self.sel:
+                    self.sel = {k}
+                ast, aL = self._AL()
+                rig = self._s().rig
+                offs = {n9: (float(rig.get(EY._p_pin(ast, aL, n9, 0), 0.0)),
+                             float(rig.get(EY._p_pin(ast, aL, n9, 1), 0.0)))
+                        for n9 in self.sel}
+                self.drag = (self.J, self._s2q(mp, self.J), offs)
+                self.moved = False
+                return {'RUNNING_MODAL'}
+            if ev.value == 'RELEASE' and self.drag:
+                self.drag = None
+                if self.moved:
+                    self._autokey(self.sel)
+                else:
+                    pass
+                return {'RUNNING_MODAL'}
+            if not inside:
+                return {'PASS_THROUGH'}
+            return {'RUNNING_MODAL'}
+        if ev.type in _XF_NAV or ev.type.startswith(("NDOF", "TRACKPAD",
+                                                      "TIMER")):
+            return {'PASS_THROUGH'}
+        return {'RUNNING_MODAL'}
+
+
 face_classes = face_classes + (FSKR_OT_part_transform,
-                               FSKR_OT_part_transform_key)
+                               FSKR_OT_part_transform_key,
+                               FSKR_OT_pin_reset, FSKR_OT_pin_key,
+                               FSKR_OT_pin_tool)
