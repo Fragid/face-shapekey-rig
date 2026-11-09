@@ -506,12 +506,34 @@ def _part_mat(s, st, L, aff):
     tex.extension = 'CLIP'
     tex.interpolation = 'Linear'
     Lk.new(cm.outputs[0], tex.inputs["Vector"])
-    hsv = nd('ShaderNodeHueSaturation', -250, 100)
-    hsv.name = "FSKR_part_hsv"
-    hsv.inputs["Hue"].default_value = 0.5 + L.hue
-    hsv.inputs["Saturation"].default_value = L.sat
-    hsv.inputs["Value"].default_value = L.val
-    Lk.new(tex.outputs["Color"], hsv.inputs["Color"])
+    # 색조/채도/명도 + 색 덮기 (캔버스와 같은 순서·같은 노드 이름이라
+    # 패널에서 값을 바꾸면 바로 반영됨). 부모 것도 캔버스처럼 받음
+    col = tex.outputs["Color"]
+    xx = -300
+    for X in [L] + EY.layer_ancestors(st, L):
+        own = X is L
+        sfx = "" if own else ".in" + L.lid
+        if own or L.inh_hsv:
+            h9 = nd('ShaderNodeHueSaturation', xx, 100)
+            h9.name = EY._hsv_node_name(st, X) + sfx
+            h9.inputs["Hue"].default_value = 0.5 + X.hue
+            h9.inputs["Saturation"].default_value = X.sat
+            h9.inputs["Value"].default_value = X.val
+            Lk.new(col, h9.inputs["Color"])
+            col = h9.outputs[0]
+            xx += 60
+        if getattr(X, "ov_on", False) and (own or L.inh_ov):
+            o9 = nd('ShaderNodeMix', xx, 100)
+            o9.data_type = 'RGBA'
+            o9.blend_type = {'MIX': 'MIX', 'COLOR': 'COLOR',
+                             'MULTIPLY': 'MULTIPLY'}.get(X.ov_mode, 'MIX')
+            o9.clamp_result = True
+            o9.name = EY._ov_node_name(st, X) + sfx
+            o9.inputs[0].default_value = X.ov_fac
+            Lk.new(col, o9.inputs[6])
+            o9.inputs[7].default_value = EY._lin4(X.ov_color)
+            col = o9.outputs[2]
+            xx += 60
     ov = nd('ShaderNodeValue', -500, -300)
     ov.label = "opacity × visible"
     EY._drv_vars(ov.outputs[0], None, "op*(vis>=0.5)",
@@ -520,7 +542,7 @@ def _part_mat(s, st, L, aff):
     a = mth('MULTIPLY', tex.outputs["Alpha"], ins, -250, -150)
     a = mth('MULTIPLY', a, ov.outputs[0], -100, -150)
     em = nd('ShaderNodeEmission', 0, 100)
-    Lk.new(hsv.outputs[0], em.inputs["Color"])
+    Lk.new(col, em.inputs["Color"])
     tr = nd('ShaderNodeBsdfTransparent', 0, -50)
     mx = nd('ShaderNodeMixShader', 200, 0)
     Lk.new(a, mx.inputs[0])
@@ -706,33 +728,130 @@ def _canvas_gap(st):
     return abs(float(w.offset)) * (abs(sc.x) + abs(sc.y) + abs(sc.z)) / 3.0
 
 
-def update_offsets(s, st):
-    """메시 파츠의 얼굴 표면 높이: 위에 캔버스 그림 파츠가 있으면 캔버스
-    뒤(피부와 캔버스 사이), 없으면 캔버스 앞. 같은 쪽끼리는 목록 순서대로."""
+def _box_hit(a, b):
+    return a[0] < b[1] and b[0] < a[1] and a[2] < b[3] and b[2] < a[3]
+
+
+def _mirror_box(bx):
+    return (1.0 - bx[1], 1.0 - bx[0], bx[2], bx[3])
+
+
+def _layer_uv_boxes(context, s, st, X):
+    """캔버스 파츠 X가 캔버스 UV에서 차지하는 영역들 (대칭 복사 포함)."""
+    from . import face_ui as FU
+    try:
+        sp = FU.part_space(context, s, st, X)
+    except Exception:
+        sp = None
+    if sp is None:
+        return []
+    bb = None
+    try:
+        if EY._layer_atlas(s, X) is None:
+            bb = EY.cell_bbox(s, st, X)
+    except Exception:
+        bb = None
+    u0, u1, v0, v1 = bb if bb else (0.0, 1.0, 0.0, 1.0)
+    try:
+        if float(s.rig.get(EY._p_flip(st, X), 0.0)) >= 0.5:
+            u0, u1 = 1.0 - u1, 1.0 - u0
+    except Exception:
+        pass
+    pts = [sp._q2uv((qu, qv)) for qu in (u0, u1) for qv in (v0, v1)]
+    bx = (min(p.x for p in pts), max(p.x for p in pts),
+          min(p.y for p in pts), max(p.y for p in pts))
+    out = [bx]
+    if EY.sym_built(X):
+        out.append(_mirror_box(bx))
+    return out
+
+
+def _mesh_uv_boxes(arm, ob, L):
+    B = arm["fskr_B"]
+    us, vs = [], []
+    for v in ob.data.vertices:
+        us.append(B[0] * v.co.x + B[1] * v.co.y)
+        vs.append(B[2] * v.co.x + B[3] * v.co.y)
+    if not us:
+        return []
+    bx = (min(us), max(us), min(vs), max(vs))
+    out = [bx]
+    if EY.sym_built(L):
+        out.append(_mirror_box(bx))
+    return out
+
+
+def auto_back(context, s, st, L, arm, ob):
+    """자동 앞뒤: 아래쪽 캔버스 파츠와 겹치면 앞(그 위에 보여야 함),
+    아래와는 안 겹치고 위쪽 캔버스 파츠와만 겹치면 뒤."""
+    mine = _mesh_uv_boxes(arm, ob, L)
+    layers = list(st.layers)
+    idx = next((i for i, X in enumerate(layers) if X == L), 0)
+    below = above = False
+    for i, X in enumerate(layers):
+        if X == L or mesh_on(X) or EY._layer_image(s, X) is None:
+            continue
+        hit = any(_box_hit(a, b) for a in mine
+                  for b in _layer_uv_boxes(context, s, st, X))
+        if not hit:
+            continue
+        if i > idx:
+            below = True
+        else:
+            above = True
+    return above and not below
+
+
+def update_offsets(s, st, context=None):
+    """메시 파츠의 얼굴 표면 높이. 캔버스는 한 장이라 메시 파츠는 캔버스
+    그림 전체의 앞이나 뒤에만 놓일 수 있다.
+      앞 = 캔버스 위, 뒤 = 피부와 캔버스 사이.
+    자동: 아래쪽 캔버스 파츠와 겹치면 앞, 위쪽 파츠와만 겹치면 뒤."""
+    context = context or bpy.context
     arm = puppet_arm(st)
     if arm is None:
         return
     k = float(arm.get("fskr_k", 1.0)) or 1.0
     sg = float(arm.get("fskr_nsign", 1.0))
     gap = _canvas_gap(st)
-    layers = list(st.layers)
-    for i, L in enumerate(layers):
+    for L in list(st.layers):
         ob = part_ob(L) if mesh_on(L) else None
         if ob is None:
             continue
         m = ob.modifiers.get(MOD_STICK)
         if m is None or m.node_group is None:
             continue
-        above = any(EY._layer_image(s, X) is not None and not mesh_on(X)
-                    for X in layers[:i])
+        mode = getattr(L, "mesh_depth", 'AUTO')
+        if mode == 'BACK':
+            back = True
+        elif mode == 'FRONT':
+            back = False
+        else:
+            try:
+                back = auto_back(context, s, st, L, arm, ob)
+            except Exception as e:
+                print("FSKR mesh depth:", e)
+                back = False
+        back = back and gap > 1e-6
         rank = _layer_rank(st, L)
-        if above and gap > 1e-6:
-            # 피부와 캔버스 사이 (가운데쯤부터, 위 레이어일수록 캔버스 쪽)
+        if back:
+            # 피부와 캔버스 사이 (위 레이어일수록 캔버스 쪽)
             off = -gap * 0.6 + min(OFFSET_STEP * rank, gap * 0.4)
         else:
             off = OFFSET_BASE + OFFSET_STEP * rank
-        L["mesh_back"] = bool(above and gap > 1e-6)
+        L["mesh_back"] = back
         _mod_set(m, _sock_id(m.node_group, "Offset"), off / k * sg)
+
+
+def _depth_cb(self, context):
+    st = EY._owner(self)
+    if st is None:
+        return
+    try:
+        update_offsets(context.scene.fskr, st, context)
+    except Exception as e:
+        print("FSKR mesh depth:", e)
+    _redraw_ui(context)
 
 
 def pin_bones(arm, L):
@@ -967,6 +1086,14 @@ def _plane_hit(context, arm, mp):
     return lo.x, lo.y
 
 
+def _pin_len(arm, L):
+    """핀 뼈 길이: 파츠 크기의 1/6 정도 (작은 파츠에 큰 뼈가 안 생기게)."""
+    b = arm.data.bones.get(L.get("pp_root", ""))
+    if b is None:
+        return 0.01
+    return max(b.length / 3.0, 0.002)
+
+
 def add_pin(context, arm, ob, L, x, y, parent=None):
     """핀 뼈 하나 추가 (부모 = parent 핀이면 사슬, 아니면 뿌리)."""
     root = L.get("pp_root", "")
@@ -975,7 +1102,7 @@ def add_pin(context, arm, ob, L, x, y, parent=None):
     def mk(eb):
         b = eb.new(name)
         b.head = (x, y, 0.0)
-        ln = 0.02
+        ln = _pin_len(arm, L)
         b.tail = (x, y + ln, 0.0)
         par = eb.get(parent) if parent else None
         if par is not None:
@@ -994,6 +1121,29 @@ def add_pin(context, arm, ob, L, x, y, parent=None):
     nm = _edit_bones(context, arm, mk)
     recompute_weights(arm, ob, L)
     return nm
+
+
+_PIN = {"h": None, "op": None}
+
+
+def _pin_draw():
+    op = _PIN.get("op")
+    if op is None:
+        return
+    try:
+        op.draw_px(bpy.context)
+    except Exception as e:
+        print("FSKR pin draw:", e)
+
+
+def _pin_cleanup():
+    _PIN["op"] = None
+    if _PIN["h"] is not None:
+        try:
+            bpy.types.SpaceView3D.draw_handler_remove(_PIN["h"], 'WINDOW')
+        except Exception:
+            pass
+        _PIN["h"] = None
 
 
 class FSKR_OT_mesh_pin(bpy.types.Operator):
@@ -1019,15 +1169,114 @@ class FSKR_OT_mesh_pin(bpy.types.Operator):
         _mode_obj(context)
         self.last = None
         self.added = []
+        self.area = context.area
+        self.mp = None
         context.area.header_text_set(_tr(
             "핀 찍기: 클릭 = 핀 · Shift+클릭 = 앞 핀에 이어 찍기 · "
             "Ctrl+Z = 마지막 핀 지우기 · Enter/Esc = 끝내기"))
+        try:
+            context.window.cursor_modal_set('CROSSHAIR')
+        except Exception:
+            pass
+        _pin_cleanup()
+        _PIN["op"] = self
+        _PIN["h"] = bpy.types.SpaceView3D.draw_handler_add(
+            _pin_draw, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
+        context.area.tag_redraw()
         return {'RUNNING_MODAL'}
 
+    def draw_px(self, context):
+        import gpu
+        import blf
+        import math as m
+        from gpu_extras.batch import batch_for_shader
+        if context.area is None or context.area != self.area:
+            return
+        s, st, L = _ctx(self, context)
+        arm = puppet_arm(st) if st else None
+        if arm is None or L is None:
+            return
+        reg, rv3d = context.region, context.region_data
+        try:
+            ui = float(context.preferences.system.ui_scale)
+        except Exception:
+            ui = 1.0
+        sh = gpu.shader.from_builtin('UNIFORM_COLOR')
+        gpu.state.blend_set('ALPHA')
+        sh.bind()
+        # 이 파츠의 핀 (노란 점 + 번호), 이어 찍기 기준 핀은 주황
+        mw = arm.matrix_world
+        pts = []
+        for nm in pin_bones(arm, L):
+            b = arm.data.bones[nm]
+            p = view3d_utils.location_3d_to_region_2d(
+                reg, rv3d, mw @ b.head_local)
+            if p is not None:
+                pts.append((nm, p))
+        for nm, p in pts:
+            r = 7.0 * ui
+            tris = []
+            for i in range(16):
+                a1, a2 = i / 16 * 2 * m.pi, (i + 1) / 16 * 2 * m.pi
+                tris += [(p.x, p.y), (p.x + r * m.cos(a1), p.y + r * m.sin(a1)),
+                         (p.x + r * m.cos(a2), p.y + r * m.sin(a2))]
+            bt = batch_for_shader(sh, 'TRIS', {"pos": tris})
+            sh.uniform_float("color", (1.0, 0.55, 0.1, 1.0)
+                             if nm == self.last else (1.0, 0.85, 0.2, 1.0))
+            bt.draw(sh)
+        # 마우스 위치 십자
+        if self.mp is not None:
+            x, y = self.mp
+            r = 10.0 * ui
+            bl = batch_for_shader(sh, 'LINES', {"pos": [
+                (x - r, y), (x + r, y), (x, y - r), (x, y + r)]})
+            sh.uniform_float("color", (1.0, 0.85, 0.2, 1.0))
+            bl.draw(sh)
+        # 위: 지금 상태, 아래: 도움말
+        title = _tr("핀 찍기 중") + "  ·  " + L.name + "  ·  " + \
+            _tr("핀") + " %d" % len(pts)
+        tips = (_tr("클릭 = 핀 꽂기   ·   Shift+클릭 = 앞 핀(주황)에 이어 "
+                    "찍기 (사슬, IK용)"),
+                _tr("Ctrl+Z = 마지막 핀 지우기   ·   Enter / Esc / 우클릭 = "
+                    "끝내고 포즈 모드로"))
+        fid = 0
+        for lines, top in (((title,), True), (tips, False)):
+            fs = (17 if top else 15) * ui
+            blf.size(fid, fs)
+            lh = fs * 1.55
+            pad = 10 * ui
+            ws = [blf.dimensions(fid, t9)[0] for t9 in lines]
+            bw = max(ws) + pad * 2
+            bh = lh * len(lines) + pad * 1.2
+            bx0 = (reg.width - bw) / 2
+            by0 = reg.height - bh - 60 * ui if top else 60 * ui
+            gpu.state.blend_set('ALPHA')
+            bg = batch_for_shader(sh, 'TRIS', {"pos": [
+                (bx0, by0), (bx0 + bw, by0), (bx0 + bw, by0 + bh),
+                (bx0, by0), (bx0 + bw, by0 + bh), (bx0, by0 + bh)]})
+            sh.bind()
+            sh.uniform_float("color", (0.75, 0.45, 0.05, 0.85) if top
+                             else (0.06, 0.06, 0.08, 0.75))
+            bg.draw(sh)
+            gpu.state.blend_set('NONE')
+            for i, t9 in enumerate(reversed(lines)):
+                w = ws[len(lines) - 1 - i]
+                blf.color(fid, 1, 1, 1, 1)
+                blf.position(fid, (reg.width - w) / 2,
+                             by0 + pad * 0.8 + i * lh, 0)
+                blf.draw(fid, t9)
+        gpu.state.blend_set('NONE')
+
     def _finish(self, context):
+        _pin_cleanup()
+        try:
+            context.window.cursor_modal_restore()
+        except Exception:
+            pass
         try:
             context.area.header_text_set(None)
+            context.area.tag_redraw()
         except Exception:
             pass
         s, st, L = _ctx(self, context)
@@ -1049,9 +1298,18 @@ class FSKR_OT_mesh_pin(bpy.types.Operator):
         return {'FINISHED'}
 
     def modal(self, context, ev):
+        if _PIN.get("op") is not self:
+            return self._finish(context)
         if ev.type in ('ESC', 'RET', 'NUMPAD_ENTER', 'RIGHTMOUSE') and \
                 ev.value == 'PRESS':
             return self._finish(context)
+        if ev.type == 'MOUSEMOVE':
+            self.mp = (ev.mouse_region_x, ev.mouse_region_y)
+            try:
+                self.area.tag_redraw()
+            except Exception:
+                pass
+            return {'PASS_THROUGH'}
         if ev.type == 'Z' and (ev.ctrl or ev.oskey) and ev.value == 'PRESS':
             if self.added:
                 s, st, L = _ctx(self, context)
@@ -1125,7 +1383,7 @@ class FSKR_OT_mesh_ik(bpy.types.Operator):
             e = eb.get(end)
             t = eb.new(tname)
             t.head = e.head.copy()
-            t.tail = e.head + Vector((0.0, 0.03, 0.0))
+            t.tail = e.head + Vector((0.0, _pin_len(arm, L) * 1.5, 0.0))
             t.parent = eb.get(root)
             t.use_deform = False
             return t.name
@@ -1174,6 +1432,12 @@ def draw_mesh_box(layout, s, st, L):
     h = b.row()
     h.active = False
     h.label(text=ob.name, icon='OBJECT_DATA')
+    r = b.row(align=True)
+    r.prop(L, "mesh_depth", text="")
+    h = r.row()
+    h.active = False
+    h.label(text=_tr("지금: 캔버스 뒤") if L.get("mesh_back")
+            else _tr("지금: 캔버스 앞"))
     r = b.row()
     r.scale_y = 1.4
     op = r.operator("fskr.mesh_pin", icon='BONE_DATA', text=_tr("핀 찍기"))

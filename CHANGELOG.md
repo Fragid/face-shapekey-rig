@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.238
+
+### Fixed
+- Mesh parts were sent behind the whole canvas whenever any canvas part sat
+  above them in the list, so an eyelid ended up behind the eye white. Depth
+  is now chosen by overlap: in front if the mesh part overlaps a canvas part
+  below it, behind if it only overlaps parts above. A per-part
+  Auto / In Front / Behind option overrides it.
+- Mesh parts ignored the color overlay (and parent HSV / overlay), so they
+  rendered in the wrong color. They now use the same chain as the canvas and
+  update live from the panel.
+- Pin placement gave no feedback. The tool now shows a status bar, help text
+  and a crosshair cursor, and marks existing pins.
+
 ## v1.0.237
 
 ### Added

@@ -275,6 +275,11 @@ def _show_vp_cb(self, context):
 _MUTE_REBUILD = {"on": False}
 
 
+def _mesh_depth_cb(self, context):
+    from . import puppet as PP
+    PP._depth_cb(self, context)
+
+
 def _rebuild_cb(self, context):
     if _MUTE_REBUILD["on"]:
         return
@@ -1382,7 +1387,8 @@ def _hsv_update(self, context):
     nm = _hsv_node_name(st, self)
     hit = False
     for m in bpy.data.materials:
-        if not m.name.startswith(_MAT_PREFIX) or m.node_tree is None:
+        if not m.name.startswith((_MAT_PREFIX, "FSKR_PART_")) or \
+                m.node_tree is None:
             continue
         for nd in m.node_tree.nodes:
             if nd.name != nm and not nd.name.startswith(nm + ".in"):
@@ -1407,7 +1413,8 @@ def _ov_update(self, context):
     nm = _ov_node_name(st, self)
     hit = False
     for m in bpy.data.materials:
-        if not m.name.startswith(_MAT_PREFIX) or m.node_tree is None:
+        if not m.name.startswith((_MAT_PREFIX, "FSKR_PART_")) or \
+                m.node_tree is None:
             continue
         for nd in m.node_tree.nodes:
             if nd.name != nm and not nd.name.startswith(nm + ".in"):
@@ -2382,6 +2389,13 @@ class FSKR_EyeLayer(bpy.types.PropertyGroup):
     # 메시 파츠 (실험): 캔버스 셰이더 대신 메시 오브젝트로 그림
     mesh_on: bpy.props.BoolProperty(default=False)
     mesh_ob: bpy.props.StringProperty(default="")
+    mesh_depth: bpy.props.EnumProperty(
+        name="앞뒤", default='AUTO',
+        items=(('AUTO', "자동", "아래쪽 캔버스 파츠와 겹치면 앞, 위쪽 파츠와만 "
+                "겹치면 뒤"),
+               ('FRONT', "캔버스 앞", "캔버스 그림 전체보다 앞"),
+               ('BACK', "캔버스 뒤", "캔버스 그림 전체보다 뒤 (피부 바로 위)")),
+        update=lambda s, c: _mesh_depth_cb(s, c))
     mesh_res: bpy.props.IntProperty(
         name="메시 촘촘함", default=14, min=3, max=60,
         description="그림의 긴 쪽을 몇 칸으로 나눌지. 많을수록 부드럽게 "
