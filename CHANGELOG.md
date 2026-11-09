@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.0.235
+
+### Added
+- Warp Shape (experimental): bend a part's drawing with a 3×3 grid, similar
+  to a Live2D warp deformer. Turn it on in the part's placement box, enter
+  X/Y offsets for the 9 grid points, and drive the amount with the keyable
+  rig property `<Part>_Warp` (0–1). The amount is saved in keys, expression
+  presets and part folders.
+- The grid works in on-screen part space: flipping keeps the bend, symmetry
+  copies bend as a mirror, and crop follows the bent drawing.
+- Editing the grid only rewrites driver expressions; the material is not
+  rebuilt. An inverse-error readout and a fold-over warning are shown.
+- With Warp Shape off, the material is identical to v1.0.234; with the
+  amount at 0, renders match pixel for pixel.
+
 ## v1.0.234
 
 ### Fixed

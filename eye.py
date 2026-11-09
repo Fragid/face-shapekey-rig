@@ -2370,6 +2370,17 @@ class FSKR_EyeLayer(bpy.types.PropertyGroup):
         description="종횡비 고정 중: 세로를 바꾸면 가로도 같은 비율로")
     pick: bpy.props.EnumProperty(name="칸", items=_cell_items,
                                  get=_cell_get, set=_cell_set)
+    # 모양 휘기 (실험): 3×3 격자 점 9개의 (x, y) 이동량, 세기 1일 때
+    #   순서: 아래 줄 왼→오, 가운데 줄, 위 줄. 단위 = 파츠 크기(1)
+    warp_on: bpy.props.BoolProperty(
+        name="모양 휘기", default=False,
+        update=lambda s, c: _warp_on_cb(s, c),
+        description="파츠 그림을 3×3 격자로 휩니다 (실험 기능). "
+                    "휘는 정도는 리그 프로퍼티 _Warp (0~1, 키 가능)")
+    warp_d: bpy.props.FloatVectorProperty(
+        size=18, default=(0.0,) * 18, step=1, precision=3,
+        update=lambda s, c: _warp_d_cb(s, c))
+    show_warp: bpy.props.BoolProperty(default=True)
 
 
 class FSKR_FaceSheet(bpy.types.PropertyGroup):
@@ -2954,13 +2965,15 @@ def _anim_props(st, L):
             _p_sy(st, L), _p_rot(st, L),
             _p_crop(st, L, "t"), _p_crop(st, L, "b"),
             _p_crop(st, L, "l"), _p_crop(st, L, "r"), _p_vis(st, L),
-            _p_flip(st, L), _p_side(st, L), _p_sym(st, L))
+            _p_flip(st, L), _p_side(st, L), _p_sym(st, L)) + \
+        ((_p_warp(st, L),) if warp_on(L) else ())
 
 
+# 모양 휘기(warp)는 켠 파츠만 맨 끝에 붙음 (zip이 짧은 쪽에 맞춰 끊김)
 ANIM_KEYS = ("op", "px", "py", "sx", "sy", "rot", "ct", "cb", "cl", "cr",
-             "vis", "flip", "side", "sym")
+             "vis", "flip", "side", "sym", "warp")
 ANIM_DEFAULTS = (1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-                 0.0, 0.0)
+                 0.0, 0.0, 0.0)
 CONST_KEYS = ("vis", "flip", "side", "sym")   # 항상 Constant 보간
 _CONST_SUFFIX = ("_Visible", "_vis", "_Flip", "_flip", "_Side", "_side",
                  "_Mirror", "_mirror")
@@ -2997,6 +3010,280 @@ def _ensure_anim_props(rig, st, L):
         if raw:
             L["sym_built"] = True
     _ensure_float(rig, pm, 0.0, 0.0, 1.0)
+    if warp_on(L):
+        _ensure_float(rig, _p_warp(st, L), 0.0, 0.0, 1.0)
+
+
+# ------------------------------------------------------------------
+# 모양 휘기 (격자 변형, 실험 단계)
+#   편집: 정방향 격자 F(s) = s + Σ Bi(su)·Bj(sv)·w·Dij  (2차 베지어 3×3)
+#         s = 그림 좌표, F(s) = 화면(파츠 공간 q)에서 그 점이 보이는 곳
+#   렌더: 역방향 필드 s ≈ q + Σ Bi(qu)·Bj(qv)·Qij  (셰이더는 이것만 계산)
+#   Qij 는 w = 0.25, 0.5, 0.75, 1 에서 미리 최소제곱으로 맞춰 두고
+#   드라이버 식(Simple Expression)으로 w 사이를 직선 보간한다.
+#   w = 0 이면 G = 0 → 변형 전과 똑같음.
+# ------------------------------------------------------------------
+
+WARP_STEPS = (0.25, 0.5, 0.75, 1.0)
+
+
+def _p_warp(st, L):
+    """모양 휘기 정도 0~1 (키·프리셋·폴더에 들어감)."""
+    k = _pk(L)
+    return (k + "_Warp") if k else "fskr_ey_%s_%s_warp" % (st.uid, L.lid)
+
+
+def warp_on(L):
+    return bool(getattr(L, "warp_on", False))
+
+
+def _bern(t):
+    o = 1.0 - t
+    return (o * o, 2.0 * t * o, t * t)
+
+
+def _bern_d(t):
+    return (-2.0 * (1.0 - t), 2.0 - 4.0 * t, 2.0 * t)
+
+
+def warp_fwd(D, su, sv, w=1.0):
+    """정방향: 그림 좌표 s → 화면 q."""
+    bu, bv = _bern(su), _bern(sv)
+    x, y = su, sv
+    for j in range(3):
+        for i in range(3):
+            b = bu[i] * bv[j] * w
+            k = (j * 3 + i) * 2
+            x += b * D[k]
+            y += b * D[k + 1]
+    return x, y
+
+
+def _warp_det(D, su, sv, w=1.0):
+    """정방향 야코비안 행렬식 (0 이하 = 접힘)."""
+    bu, bv = _bern(su), _bern(sv)
+    du, dv = _bern_d(su), _bern_d(sv)
+    a, b, c, d = 1.0, 0.0, 0.0, 1.0
+    for j in range(3):
+        for i in range(3):
+            k = (j * 3 + i) * 2
+            gu, gv = du[i] * bv[j] * w, bu[i] * dv[j] * w
+            a += gu * D[k]
+            b += gv * D[k]
+            c += gu * D[k + 1]
+            d += gv * D[k + 1]
+    return a * d - b * c
+
+
+def _solve9(A, b):
+    n = len(b)
+    M = [list(A[r]) + [b[r]] for r in range(n)]
+    for col in range(n):
+        piv = max(range(col, n), key=lambda r: abs(M[r][col]))
+        M[col], M[piv] = M[piv], M[col]
+        p = M[col][col]
+        if abs(p) < 1e-14:
+            continue
+        for r in range(n):
+            if r != col:
+                f = M[r][col] / p
+                if f:
+                    for c9 in range(col, n + 1):
+                        M[r][c9] -= f * M[col][c9]
+    return [M[r][n] / M[r][r] if abs(M[r][r]) > 1e-14 else 0.0
+            for r in range(n)]
+
+
+def warp_fit(D, w=1.0, n=25, pad=0.05):
+    """정방향 격자 D(18개, 세기 w)의 역방향 Q(18개)를 최소제곱으로.
+    반환 (Q, 최대 오차, 최소 행렬식). 오차·행렬식은 파츠 크기(1) 기준."""
+    A = [[0.0] * 9 for _ in range(9)]
+    bx, by = [0.0] * 9, [0.0] * 9
+    samp = []
+    mind = 1e9
+    for a9 in range(n):
+        su = -pad + (1.0 + 2.0 * pad) * a9 / (n - 1)
+        for c9 in range(n):
+            sv = -pad + (1.0 + 2.0 * pad) * c9 / (n - 1)
+            qx, qy = warp_fwd(D, su, sv, w)
+            bu, bv = _bern(qx), _bern(qy)
+            row = [bu[i] * bv[j] for j in range(3) for i in range(3)]
+            tx, ty = su - qx, sv - qy
+            for r in range(9):
+                bx[r] += row[r] * tx
+                by[r] += row[r] * ty
+                for c in range(9):
+                    A[r][c] += row[r] * row[c]
+            samp.append((row, tx, ty))
+            if 0.0 <= su <= 1.0 and 0.0 <= sv <= 1.0:
+                mind = min(mind, _warp_det(D, su, sv, w))
+    for r in range(9):
+        A[r][r] += 1e-9
+    qx, qy = _solve9(A, bx), _solve9(A, by)
+    err = 0.0
+    for row, tx, ty in samp:
+        gx = sum(r * q for r, q in zip(row, qx))
+        gy = sum(r * q for r, q in zip(row, qy))
+        err = max(err, ((gx - tx) ** 2 + (gy - ty) ** 2) ** 0.5)
+    Q = []
+    for k in range(9):
+        Q += [qx[k], qy[k]]
+    return Q, err, mind
+
+
+def warp_table(L):
+    """단계별 역방향 표 [(w, Q)], 최대 오차, 최소 행렬식."""
+    D = [float(v) for v in L.warp_d]
+    tab, err, mind = [], 0.0, 1e9
+    for w in WARP_STEPS:
+        Q, e, d = warp_fit(D, w)
+        tab.append((w, Q))
+        err, mind = max(err, e), min(mind, d)
+    return tab, err, mind
+
+
+def _warp_expr(tab, k):
+    """역방향 성분 k 의 드라이버 식 (w 에 대해 구간별 직선, w=0 이면 0)."""
+    h = 1.0 / (WARP_STEPS[1] - WARP_STEPS[0])
+    terms = []
+    for w, Q in tab:
+        c = Q[k]
+        if abs(c) < 1e-7:
+            continue
+        terms.append("%.6g*max(0,1-abs(min(max(w,0),1)-%.4g)*%.4g)"
+                     % (c, w, h))
+    return "+".join(terms) if terms else "0*w"
+
+
+def _warp_node_name(st, L, k):
+    return "EYWQ_%s_%s_%d" % (st.uid, L.lid, k)
+
+
+def warp_refresh(st, L):
+    """역방향 표만 다시 써서 드라이버 식 갱신 (재구성 없이). 고친 개수."""
+    tab = warp_table(L)[0]
+    pre = 'nodes["EYWQ_%s_%s_' % (st.uid, L.lid)
+    hit = 0
+    for m in bpy.data.materials:
+        nt = m.node_tree
+        nad = nt.animation_data if nt else None
+        if nad is None or not m.name.startswith(_MAT_PREFIX):
+            continue
+        for fc in nad.drivers:
+            dp = fc.data_path
+            if not dp.startswith(pre):
+                continue
+            try:
+                k = int(dp[len(pre):].split('"', 1)[0].split(".", 1)[0])
+                ax = int(dp.split("inputs[", 1)[1].split("]", 1)[0])
+            except Exception:
+                continue
+            if not (0 <= k < 9 and ax in (0, 1)):
+                continue
+            fc.driver.expression = _warp_expr(tab, k * 2 + ax)
+            hit += 1
+        if hit:
+            try:
+                nt.update_tag()
+            except Exception:
+                pass
+    return hit
+
+
+def _warp_d_cb(self, context):
+    """격자 값을 바꾸면 드라이버 식만 갱신 (노드 그대로)."""
+    st = _owner(self)
+    if st is None or not warp_on(self):
+        return
+    try:
+        if warp_refresh(st, self) == 0 and st.built:
+            _rebuild_cb(self, context)
+    except Exception as e:
+        print("FSKR warp refresh:", e)
+    try:
+        rig = context.scene.fskr.rig
+        if rig is not None:
+            rig.update_tag()
+    except Exception:
+        pass
+    _redraw_ui(context)
+
+
+def _warp_on_cb(self, context):
+    st = _owner(self)
+    try:
+        rig = context.scene.fskr.rig
+        if st is not None and rig is not None and self.warp_on:
+            _ensure_float(rig, _p_warp(st, self), 0.0, 0.0, 1.0)
+    except Exception:
+        pass
+    _rebuild_cb(self, context)
+
+
+_WARP_Q = {}
+
+
+def warp_quality(L):
+    """(최대 오차, 최소 행렬식) — 값이 같으면 캐시."""
+    key = tuple(round(float(v), 5) for v in L.warp_d)
+    r = _WARP_Q.get(key)
+    if r is None:
+        if len(_WARP_Q) > 64:
+            _WARP_Q.clear()
+        _, e, d = warp_table(L)
+        r = _WARP_Q[key] = (e, d)
+    return r
+
+
+def draw_warp(layout, s, st, L):
+    """모양 휘기 (실험) 상자: 켜기, 세기(키 가능), 격자 점 9개."""
+    rig = s.rig
+    if rig is None or L.kind == 'MOUTH' and _layer_atlas(s, L) is None:
+        return
+    ast, aL = _anim_source(s, st, L)
+    b = layout.box().column(align=True)
+    r = b.row(align=True)
+    r.prop(aL, "show_warp", text="", emboss=False,
+           icon='TRIA_DOWN' if aL.show_warp else 'TRIA_RIGHT')
+    r.prop(aL, "warp_on", text=_tr("모양 휘기 (실험)"), icon='MOD_LATTICE')
+    if not aL.show_warp or not aL.warp_on:
+        return
+    if aL is not L:
+        h = b.row()
+        h.active = False
+        h.label(text=_tr("따라가는 파츠") + ": " + ast.name + " / "
+                + aL.name, icon='LINKED')
+    pw = _p_warp(ast, aL)
+    if pw in rig.keys():
+        r = b.row(align=True)
+        r.prop(rig, '["%s"]' % pw, text=_tr("휘는 정도"), slider=True)
+    else:
+        op = b.operator("fskr.eye_build", text=_tr("머티리얼 다시 만들기"),
+                        icon='FILE_REFRESH')
+        op.uid = st.uid
+    b.separator(factor=0.4)
+    h = b.row()
+    h.active = False
+    h.label(text=_tr("격자 점 이동량 (휘는 정도 1일 때, 파츠 크기 = 1)"))
+    for j, nm in ((2, "위"), (1, "가운데"), (0, "아래")):
+        r = b.row(align=True)
+        r.label(text=_tr(nm))
+        for i in range(3):
+            c = r.column(align=True)
+            k = (j * 3 + i) * 2
+            c.prop(aL, "warp_d", index=k, text="X")
+            c.prop(aL, "warp_d", index=k + 1, text="Y")
+    err, mind = warp_quality(aL)
+    r = b.row()
+    r.active = False
+    r.label(text=_tr("역변환 오차") + " %.2f%%" % (err * 100.0),
+            icon='CHECKMARK' if err < 0.005 else 'INFO')
+    if mind <= 0.0:
+        b.label(text=_tr("격자가 접혔습니다: 점을 덜 움직이세요"),
+                icon='ERROR')
+    elif err >= 0.02:
+        b.label(text=_tr("너무 많이 휘어 그림이 어긋날 수 있습니다"),
+                icon='ERROR')
 
 
 def _mirror_all(s, st):
@@ -4151,6 +4438,48 @@ def _eye_mat(s, st, over=False):
             sm.inputs["Scale"].default_value = (-1.0, 1.0, 1.0)
             link(luv, sm.inputs["Vector"])
             srcs.append(sm.outputs[0])
+        # 모양 휘기: 역방향 제어점 9개 (복사본들이 같이 씀)
+        wq = None
+        if warp_on(aL):
+            pw = _p_warp(ast, aL)
+            _ensure_float(rig, pw, 0.0, 0.0, 1.0)
+            wtab = warp_table(aL)[0]
+            wq = []
+            for k9 in range(9):
+                cq = node('ShaderNodeCombineXYZ', -1500, y + 420 - 25 * k9)
+                cq.name = _warp_node_name(ast, aL, k9)
+                cq.label = "%s: warp %d" % (L.name, k9)
+                for ax in (0, 1):
+                    _drv_vars(cq.inputs[ax], None,
+                              _warp_expr(wtab, k9 * 2 + ax),
+                              [("w", rig, '["%s"]' % pw)])
+                wq.append(cq.outputs[0])
+
+        def warp_apply(q9, yy):
+            """q' = q + Σ Bi(u)·Bj(v)·Qij  (2차 베지어, 칸 선택 없음)."""
+            sw = node('ShaderNodeSeparateXYZ', -1420, yy + 120)
+            link(q9, sw.inputs[0])
+            bs = []
+            for ax in (0, 1):
+                t9 = sw.outputs[ax]
+                yb = yy + 160 + 60 * ax
+                om = math('SUBTRACT', 1.0, t9, -1400, yb)
+                bs.append((math('MULTIPLY', om, om, -1390, yb),
+                           math('MULTIPLY',
+                                math('MULTIPLY', t9, om, -1390, yb - 10),
+                                2.0, -1380, yb - 10),
+                           math('MULTIPLY', t9, t9, -1390, yb - 20)))
+            bu, bv = bs
+            g9 = None
+            for j9 in range(3):
+                r9 = None
+                for i9 in range(3):
+                    t = vscale(wq[j9 * 3 + i9], bu[i9], -1370, yy + 140)
+                    r9 = t if r9 is None else vadd(r9, t, -1360, yy + 140)
+                t = vscale(r9, bv[j9], -1350, yy + 140)
+                g9 = t if g9 is None else vadd(g9, t, -1340, yy + 140)
+            return vadd(q9, g9, -1330, yy + 120)
+
         coords = []
         for ci, src_uv in enumerate(srcs):
             yy = y - ci * 260
@@ -4173,6 +4502,8 @@ def _eye_mat(s, st, over=False):
                 xbind(xf9.inputs["Location"].driver_add(
                     "default_value", 1), 'XFY')
                 out9 = xf9.outputs[0]
+            if wq is not None:   # 크롭·반전 전, 화면 기준 파츠 공간에서
+                out9 = warp_apply(out9, yy)
             coords.append(out9)
         # 칸 선택 (리그 프로퍼티). 입 레이어는 입 시트의 조회표를 그대로 씀
         if ait is None:
@@ -7567,6 +7898,7 @@ class FSKR_PT_eyes(bpy.types.Panel):
         r = db.row(align=True)
         r.prop(L, "flip_x", toggle=True, icon='MOD_MIRROR')
         r.prop(L, "sym", toggle=True, icon='MOD_MIRROR')
+        draw_warp(db, s, st, L)
         # 색조/채도/명도
         hb = db.column(align=True)
         hr = hb.row(align=True)

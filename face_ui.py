@@ -1459,8 +1459,8 @@ def preset_apply(s, st, pr, groups, key, frame=None):
             d = dict(d)
             d["vis"] = 1.0
         for k, p, dv in zip(EY.ANIM_KEYS, props, EY.ANIM_DEFAULTS):
-            if k not in d and k in ("ct", "cb", "cl", "cr"):
-                # 크롭이 없던 때 저장한 프리셋 = 크롭 없음(0)
+            if k not in d and k in ("ct", "cb", "cl", "cr", "warp"):
+                # 크롭·휘기가 없던 때 저장한 프리셋 = 크롭·휘기 없음(0)
                 d = dict(d)
                 d[k] = dv
             if k in d:
@@ -3079,6 +3079,7 @@ def draw_part_props(col, context, s, st, L, rig, mouth_panel=False):
                      if sd9 == "L" else
                      _tr("원본 = 화면 오른쪽, 복사본 = 화면 왼쪽"),
                      icon='INFO')
+    EY.draw_warp(b, s, st, L)
     # 키: 이 파츠의 지금 값 전부 (칸·배치·불투명도·크롭)
     b.separator(factor=0.5)
     kb = b.row(align=True)
